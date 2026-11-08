@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.view.View
 import android.view.ViewTreeObserver
 import android.widget.Button
+import android.widget.PopupMenu
 import android.widget.TextView
 import app.hachure.BuildConfig
 import app.hachure.R
@@ -35,7 +36,7 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.btn_clear).setOnClickListener { canvas.clearPage() }
         findViewById<Button>(R.id.btn_clean).setOnClickListener { canvas.cleanScreen() }
         findViewById<Button>(R.id.btn_debug).setOnClickListener { toggleDebug() }
-        btnLiveStyle.setOnClickListener { cycleLiveStyle() }
+        btnLiveStyle.setOnClickListener { pickLiveStyle() }
         btnCoords.setOnClickListener { toggleCoords() }
 
         canvas.statsListener = CanvasView.StatsListener { points, penUpMs, renderMs ->
@@ -44,10 +45,12 @@ class MainActivity : Activity() {
         }
         canvas.backendChanged = {
             pushExcludeRects()
+            updateStyleButton()
             if (debugVisible()) renderDebug()
         }
 
         canvas.viewTreeObserver.addOnGlobalLayoutListener(layoutListener)
+        updateStyleButton()
     }
 
     override fun onResume() {
@@ -72,18 +75,30 @@ class MainActivity : Activity() {
     private fun toggleDebug() {
         val show = !debugVisible()
         debugOverlay.visibility = if (show) View.VISIBLE else View.GONE
-        val onyxControls = if (show && onyx() != null) View.VISIBLE else View.GONE
-        btnLiveStyle.visibility = onyxControls
-        btnCoords.visibility = onyxControls
+        btnCoords.visibility = if (show && onyx() != null) View.VISIBLE else View.GONE
         if (show) renderDebug()
     }
 
-    /** Compare SDK live styles against the committed render (spec: report which looks closest). */
-    private fun cycleLiveStyle() {
+    /** Pick a live A2 style. Inking is paused while the menu covers the canvas. */
+    private fun pickLiveStyle() {
         val o = onyx() ?: return
-        val styles = OnyxInkBackend.LiveStyle.entries
-        o.liveStyle = styles[(o.liveStyle.ordinal + 1) % styles.size]
-        renderDebug()
+        val menu = PopupMenu(this, btnLiveStyle)
+        OnyxInkBackend.LiveStyle.entries.forEach { menu.menu.add(0, it.ordinal, it.ordinal, it.label) }
+        canvas.backend.setEnabled(false)
+        menu.setOnMenuItemClickListener { item ->
+            o.liveStyle = OnyxInkBackend.LiveStyle.entries[item.itemId]
+            updateStyleButton()
+            if (debugVisible()) renderDebug()
+            true
+        }
+        menu.setOnDismissListener { canvas.backend.setEnabled(true) }
+        menu.show()
+    }
+
+    private fun updateStyleButton() {
+        val o = onyx()
+        btnLiveStyle.visibility = if (o != null) View.VISIBLE else View.GONE
+        if (o != null) btnLiveStyle.text = getString(R.string.live_style, o.liveStyle.label)
     }
 
     private fun toggleCoords() {
@@ -94,7 +109,6 @@ class MainActivity : Activity() {
 
     private fun renderDebug() {
         onyx()?.let {
-            btnLiveStyle.text = getString(R.string.live_style, it.liveStyle.label)
             btnCoords.text = getString(if (it.pointsAreScreenAbsolute) R.string.coords_screen else R.string.coords_view)
         }
         debugOverlay.text = buildString {

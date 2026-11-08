@@ -30,11 +30,19 @@ class OnyxInkBackend : InkBackend {
     override val name = "Onyx SDK (A2)"
     override val rendersLiveStroke = true
 
-    /** Live A2 stroke style. Cycled from the debug toolbar to compare against the final render. */
+    /**
+     * Every live A2 stroke style the SDK offers ([V] constants 0..6 in 1.4.12). All are drawing
+     * options. Neo brush and charcoal v2 are disabled by default in the notable app over crash
+     * reports [I], so they are labelled experimental.
+     */
     enum class LiveStyle(val label: String, val sdkValue: Int) {
         PENCIL("pencil", TouchHelper.STROKE_STYLE_PENCIL),
         FOUNTAIN("fountain", TouchHelper.STROKE_STYLE_FOUNTAIN),
         MARKER("marker", TouchHelper.STROKE_STYLE_MARKER),
+        NEO_BRUSH("brush (exp)", TouchHelper.STROKE_STYLE_NEO_BRUSH),
+        CHARCOAL("charcoal", TouchHelper.STROKE_STYLE_CHARCOAL),
+        DASH("dash", TouchHelper.STROKE_STYLE_DASH),
+        CHARCOAL_V2("charcoal 2 (exp)", TouchHelper.STROKE_STYLE_CHARCOAL_V2),
     }
 
     var liveStyle = LiveStyle.PENCIL
@@ -51,10 +59,12 @@ class OnyxInkBackend : InkBackend {
         }
 
     /**
-     * Whether TouchPoint coordinates are screen-absolute (docs say so [I]) or view-local.
-     * Toggleable from the debug toolbar so a wrong guess is fixable without a new build.
+     * Whether TouchPoint coordinates are screen-absolute or view-local. The docs say screen, but
+     * on the Note Air 2 (Android 11) they are view-local: verified on device 2026-11-08 (strokes
+     * landed under the live ink with "view"). Kept switchable in the debug toolbar for other
+     * devices.
      */
-    var pointsAreScreenAbsolute = true
+    var pointsAreScreenAbsolute = false
 
     private var view: View? = null
     private var listener: InkListener? = null

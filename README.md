@@ -154,9 +154,12 @@ removes all of them and CI fails if the APK declares any permission.
 
 Tap **Debug** in the toolbar. It shows the active backend (and why it fell back, if it did), the
 device, the hidden API bypass result, panel dpi, app version, the SDK limit and exclude rects, and
-per stroke the time from pen-up to the stroke being committed. On Onyx devices two extra toolbar
-buttons appear: **A2** cycles the SDK's live stroke style (pencil, fountain, marker), and **Pts**
-switches how SDK point coordinates are read (screen or view) in case committed strokes land offset
-from the live ink.
+per stroke the time from pen-up to the stroke being committed. On Onyx devices an extra **Pts**
+button switches how SDK point coordinates are read (screen or view) in case committed strokes land
+offset from the live ink. On the Note Air 2 they are view-local, which is the default.
+
+On Onyx devices the **Style** toolbar button picks any of the SDK's seven live A2 stroke styles:
+pencil, fountain, marker, brush, charcoal, dash and charcoal 2. Brush and charcoal 2 are marked
+experimental because other apps have seen crashes with them.
 
 **Clean** does a single full refresh to clear e-ink ghosting. It never runs automatically.

@@ -4,7 +4,7 @@
     <string name="action_clear">Clear</string>
     <string name="action_clean">Clean</string>
     <string name="action_debug">Debug</string>
-    <string name="live_style">A2: %1$s</string>
+    <string name="live_style">Style: %1$s</string>
     <string name="coords_screen">Pts: screen</string>
     <string name="coords_view">Pts: view</string>
     <string name="debug_backend">Backend: %1$s</string>
