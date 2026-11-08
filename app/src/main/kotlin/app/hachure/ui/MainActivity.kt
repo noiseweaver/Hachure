@@ -3,10 +3,13 @@ package app.hachure.ui
 import android.app.Activity
 import android.graphics.Rect
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.view.ViewTreeObserver
 import android.widget.PopupMenu
 import android.widget.TextView
+import android.widget.Toast
 import app.hachure.BuildConfig
 import app.hachure.R
 import app.hachure.ink.InkDiagnostics
@@ -14,7 +17,9 @@ import app.hachure.ink.OnyxInkBackend
 import app.hachure.model.DotGrid
 import app.hachure.model.Tool
 import app.hachure.model.WidthPreset
+import app.hachure.store.NotebookStore
 import java.util.Locale
+import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
 
@@ -23,6 +28,13 @@ class MainActivity : Activity() {
     private lateinit var debugOverlay: TextView
     private lateinit var prefs: Prefs
     private var lastStats: String? = null
+
+    private lateinit var store: NotebookStore
+    private var notebookId: String? = null
+    private val main = Handler(Looper.getMainLooper())
+    private val saver = Executors.newSingleThreadExecutor()
+    private val saveSoon = Runnable { saveNow() }
+    private var dirty = false
 
     private val layoutListener = ViewTreeObserver.OnGlobalLayoutListener { pushExcludeRects() }
 
@@ -34,6 +46,10 @@ class MainActivity : Activity() {
         canvas = findViewById(R.id.canvas)
         dock = findViewById(R.id.dock)
         debugOverlay = findViewById(R.id.debug_overlay)
+
+        store = NotebookStore(ShelfActivity.notebooksDir(this))
+        notebookId = intent.getStringExtra(EXTRA_NOTEBOOK)
+        loadNotebook()
 
         canvas.tool = prefs.tool
         canvas.widthPreset = prefs.width
@@ -53,6 +69,11 @@ class MainActivity : Activity() {
             if (debugVisible()) renderDebug()
         }
         canvas.historyChanged = { updateDock() }
+        canvas.pageEdited = {
+            dirty = true
+            main.removeCallbacks(saveSoon)
+            main.postDelayed(saveSoon, SAVE_DELAY_MS)
+        }
         canvas.backendChanged = {
             pushExcludeRects()
             if (debugVisible()) renderDebug()
@@ -69,16 +90,60 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         canvas.backend.pause()
+        saveNow()
         super.onPause()
     }
 
     override fun onDestroy() {
         window.decorView.viewTreeObserver.removeOnGlobalLayoutListener(layoutListener)
+        main.removeCallbacks(saveSoon)
+        // Lets a pending save finish; nothing new is queued after this.
+        saver.shutdown()
         super.onDestroy()
+    }
+
+    override fun finish() {
+        super.finish()
+        overridePendingTransition(0, 0)
+    }
+
+    private fun loadNotebook() {
+        val id = notebookId ?: return
+        try {
+            store.loadPage(id)?.let { canvas.setPage(it) }
+        } catch (t: Throwable) {
+            // Keep the file untouched: a failed load must never be followed by a save over it.
+            notebookId = null
+            Toast.makeText(this, getString(R.string.load_failed, t.message ?: t.javaClass.simpleName), Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /** Snapshot on the UI thread, write on the saver thread. Saves are serialised. */
+    private fun saveNow() {
+        main.removeCallbacks(saveSoon)
+        val id = notebookId ?: return
+        if (!dirty) return
+        val snapshot = canvas.pageSnapshot() ?: return
+        dirty = false
+        saver.execute {
+            try {
+                store.savePage(id, snapshot)
+            } catch (t: Throwable) {
+                main.post {
+                    dirty = true
+                    Toast.makeText(this, getString(R.string.save_failed, t.message ?: t.javaClass.simpleName), Toast.LENGTH_LONG).show()
+                }
+            }
+        }
     }
 
     private fun onDockItem(item: ToolDock.Item, anchor: View) {
         when (item) {
+            ToolDock.Item.SHELF -> {
+                saveNow()
+                finish()
+                return
+            }
             ToolDock.Item.PENCIL -> selectBrush(Tool.PENCIL)
             ToolDock.Item.FOUNTAIN -> selectBrush(Tool.FOUNTAIN)
             ToolDock.Item.STYLE -> pickBrush(anchor)
@@ -223,12 +288,17 @@ class MainActivity : Activity() {
         canvas.backend.setExcludeRects(rects)
     }
 
-    private companion object {
-        const val M_LABELS = 1
-        const val M_GRID = 2
-        const val M_CLEAR = 3
-        const val M_DEBUG = 4
-        const val M_RELEASE = 5
-        const val M_COORDS = 6
+    companion object {
+        const val EXTRA_NOTEBOOK = "notebook"
+
+        /** Save this long after the last edit, and always on leaving the screen. */
+        private const val SAVE_DELAY_MS = 800L
+
+        private const val M_LABELS = 1
+        private const val M_GRID = 2
+        private const val M_CLEAR = 3
+        private const val M_DEBUG = 4
+        private const val M_RELEASE = 5
+        private const val M_COORDS = 6
     }
 }

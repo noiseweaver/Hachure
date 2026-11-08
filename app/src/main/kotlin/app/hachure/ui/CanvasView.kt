@@ -60,6 +60,9 @@ class CanvasView @JvmOverloads constructor(
     /** Called after any change to undo or redo availability. */
     var historyChanged: (() -> Unit)? = null
 
+    /** Called after every change to the page content (save trigger). */
+    var pageEdited: (() -> Unit)? = null
+
     /** Onyx on Boox devices, plain MotionEvent elsewhere or if the SDK fails to start. */
     var backend: InkBackend = InkBackends.create()
         private set
@@ -103,6 +106,22 @@ class CanvasView @JvmOverloads constructor(
     init {
         setBackgroundColor(Color.WHITE)
         isFocusable = false
+    }
+
+    /**
+     * Shows a loaded page. Call before or after layout; undo history starts empty. A view whose
+     * size differs from the saved page still works because strokes are stored in mm.
+     */
+    fun setPage(p: Page) {
+        page = p
+        history = History(p)
+        rebuild(null)
+        historyChanged?.invoke()
+    }
+
+    /** Copy of the page for saving off the UI thread. */
+    fun pageSnapshot(): Page? = page?.let { src ->
+        Page(src.widthMm, src.heightMm).also { copy -> src.snapshot().forEach { copy.add(it) } }
     }
 
     val canUndo get() = history?.canUndo == true
@@ -252,8 +271,10 @@ class CanvasView @JvmOverloads constructor(
     fun redo() = applyChange(history?.redo().orEmpty())
 
     private fun applyChange(changed: List<Stroke>) {
+        if (changed.isEmpty()) return
         regionOf(changed)?.let { rebuild(it) }
         historyChanged?.invoke()
+        pageEdited?.invoke()
     }
 
     // InkListener
@@ -345,6 +366,7 @@ class CanvasView @JvmOverloads constructor(
         strokeRenderer.drawStroke(c, stroke, transform)
         regionOf(listOf(stroke))?.let { invalidate(it) }
         historyChanged?.invoke()
+        pageEdited?.invoke()
 
         val now = SystemClock.uptimeMillis()
         statsListener?.onStrokeCommitted(points.size, now - penUpUptime, now - renderStart)
