@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Hachure</string>
+    <string name="action_clear">Clear</string>
+    <string name="action_debug">Debug</string>
+    <string name="debug_backend">Backend: %1$s</string>
+    <string name="debug_last_stroke">Last stroke: %1$d pts, input to commit %2$d ms</string>
+    <string name="debug_no_strokes">No strokes yet</string>
+</resources>
