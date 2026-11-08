@@ -2,9 +2,16 @@
 agp = "8.7.3"
 kotlin = "2.0.21"
 junit = "4.13.2"
+hiddenapibypass = "4.3"
+rxjava = "2.2.21"
+rxandroid = "2.1.1"
 
 [libraries]
 junit = { module = "junit:junit", version.ref = "junit" }
+
+hiddenapibypass = { module = "org.lsposed.hiddenapibypass:hiddenapibypass", version.ref = "hiddenapibypass" }
+rxjava = { module = "io.reactivex.rxjava2:rxjava", version.ref = "rxjava" }
+rxandroid = { module = "io.reactivex.rxjava2:rxandroid", version.ref = "rxandroid" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

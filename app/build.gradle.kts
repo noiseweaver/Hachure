@@ -58,6 +58,16 @@ android {
         buildConfig = true
     }
 
+    packaging {
+        jniLibs {
+            // onyxsdk-pen ships its own libc++_shared.so.
+            pickFirsts += "**/libc++_shared.so"
+            // Native libs stay compressed-off and extracted the classic way, matching what the
+            // Onyx samples ship with.
+            useLegacyPackaging = true
+        }
+    }
+
     lint {
         abortOnError = true
         warningsAsErrors = false
@@ -71,5 +81,16 @@ kotlin {
 
 dependencies {
     implementation(project(":core"))
+
+    // Onyx pen SDK, vendored (see README "Onyx SDK dependencies"). AARs as local files carry no
+    // POM, so nothing transitive is pulled in.
+    implementation(files("libs/onyxsdk-pen-1.4.12.aar"))
+    implementation(files("libs/onyxsdk-base-1.7.7.aar"))
+    implementation(files("libs/onyxsdk-device-1.2.31.aar"))
+    implementation(libs.hiddenapibypass) { isTransitive = false }
+    // RxJava stays transitive: it needs org.reactivestreams, which resolves cleanly.
+    implementation(libs.rxjava)
+    implementation(libs.rxandroid)
+
     testImplementation(libs.junit)
 }

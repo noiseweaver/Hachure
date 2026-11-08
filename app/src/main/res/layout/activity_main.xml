@@ -25,10 +25,38 @@
                 android:layout_height="wrap_content"
                 android:text="@string/action_clear" />
 
+            <Button
+                android:id="@+id/btn_clean"
+                style="@style/ToolbarButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/action_clean" />
+
             <Space
                 android:layout_width="0dp"
                 android:layout_height="0dp"
                 android:layout_weight="1" />
+
+            <Button
+                android:id="@+id/btn_live_style"
+                style="@style/ToolbarButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:visibility="gone" />
+
+            <Button
+                android:id="@+id/btn_release"
+                style="@style/ToolbarButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:visibility="gone" />
+
+            <Button
+                android:id="@+id/btn_coords"
+                style="@style/ToolbarButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:visibility="gone" />
 
             <Button
                 android:id="@+id/btn_debug"
@@ -50,16 +78,17 @@
             android:layout_weight="1" />
     </LinearLayout>
 
+    <!-- Fixed size so text updates never change its rect (which would reopen the SDK). -->
     <TextView
         android:id="@+id/debug_overlay"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="bottom|start"
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/debug_overlay_height"
+        android:layout_gravity="bottom"
         android:layout_margin="12dp"
         android:background="@color/debug_bg"
         android:fontFamily="monospace"
         android:padding="8dp"
         android:textColor="@color/ink"
-        android:textSize="14sp"
+        android:textSize="13sp"
         android:visibility="gone" />
 </FrameLayout>

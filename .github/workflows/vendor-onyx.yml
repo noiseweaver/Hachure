@@ -1,0 +1,46 @@
+name: Vendor Onyx SDK
+
+# Downloads the Onyx pen SDK AARs from repo.boox.com into app/libs, records SHA-256 sums and
+# commits them to the branch the workflow runs on.
+#
+# repo.boox.com offers only a weak Diffie-Hellman key exchange, which current OpenSSL and Java
+# reject ("dh key too small"). The relaxed security level applies to these curl calls only;
+# normal builds use the committed AARs and never contact the host.
+# See README "Onyx SDK dependencies" for how to refresh.
+on:
+  workflow_dispatch:
+  push:
+    branches: [vendor-onyx]
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download AARs
+        run: |
+          set -euo pipefail
+          base=https://repo.boox.com/repository/maven-public/com/onyx/android/sdk
+          mkdir -p app/libs
+          for spec in onyxsdk-pen:1.4.12 onyxsdk-base:1.7.7 onyxsdk-device:1.2.31; do
+            name=${spec%%:*}; ver=${spec##*:}
+            curl -fsSL --retry 3 --ciphers 'DEFAULT:@SECLEVEL=0' \
+              -o "app/libs/$name-$ver.aar" "$base/$name/$ver/$name-$ver.aar"
+          done
+          cd app/libs && sha256sum *.aar | tee SHA256SUMS
+
+      - name: Commit if changed
+        run: |
+          git add app/libs
+          if git diff --cached --quiet; then
+            echo "AARs unchanged."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Vendor Onyx SDK AARs"
+          git push origin "HEAD:$GITHUB_REF_NAME"
