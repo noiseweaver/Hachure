@@ -4,79 +4,11 @@
     android:layout_height="match_parent"
     android:background="@color/paper">
 
-    <LinearLayout
+    <!-- Full screen: the rail and puck float above it and are excluded from inking. -->
+    <app.hachure.ui.CanvasView
+        android:id="@+id/canvas"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:orientation="vertical">
-
-        <LinearLayout
-            android:id="@+id/toolbar"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:background="@color/toolbar_bg"
-            android:gravity="center_vertical"
-            android:orientation="horizontal"
-            android:paddingHorizontal="8dp">
-
-            <Button
-                android:id="@+id/btn_clear"
-                style="@style/ToolbarButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/action_clear" />
-
-            <Button
-                android:id="@+id/btn_clean"
-                style="@style/ToolbarButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/action_clean" />
-
-            <Space
-                android:layout_width="0dp"
-                android:layout_height="0dp"
-                android:layout_weight="1" />
-
-            <Button
-                android:id="@+id/btn_live_style"
-                style="@style/ToolbarButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:visibility="gone" />
-
-            <Button
-                android:id="@+id/btn_release"
-                style="@style/ToolbarButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:visibility="gone" />
-
-            <Button
-                android:id="@+id/btn_coords"
-                style="@style/ToolbarButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:visibility="gone" />
-
-            <Button
-                android:id="@+id/btn_debug"
-                style="@style/ToolbarButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/action_debug" />
-        </LinearLayout>
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="1dp"
-            android:background="@color/toolbar_rule" />
-
-        <app.hachure.ui.CanvasView
-            android:id="@+id/canvas"
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_weight="1" />
-    </LinearLayout>
+        android:layout_height="match_parent" />
 
     <!-- Fixed size so text updates never change its rect (which would reopen the SDK). -->
     <TextView
@@ -84,11 +16,18 @@
         android:layout_width="match_parent"
         android:layout_height="@dimen/debug_overlay_height"
         android:layout_gravity="bottom"
-        android:layout_margin="12dp"
+        android:layout_marginStart="72dp"
+        android:layout_marginEnd="72dp"
+        android:layout_marginBottom="12dp"
         android:background="@color/debug_bg"
         android:fontFamily="monospace"
         android:padding="8dp"
         android:textColor="@color/ink"
         android:textSize="13sp"
         android:visibility="gone" />
+
+    <app.hachure.ui.ToolDock
+        android:id="@+id/dock"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
 </FrameLayout>

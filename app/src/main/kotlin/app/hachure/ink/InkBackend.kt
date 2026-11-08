@@ -3,6 +3,7 @@ package app.hachure.ink
 import android.graphics.Rect
 import android.view.MotionEvent
 import android.view.View
+import app.hachure.model.Tool
 
 /** One raw stylus sample in view pixels. */
 data class RawPoint(
@@ -75,6 +76,12 @@ interface InkBackend {
 
     /** One full-quality refresh to clear e-ink ghosting. Never called automatically. */
     fun cleanScreen(target: View)
+
+    /**
+     * Current brush for live ink. [liveInk] false means report points but draw nothing (line and
+     * eraser tools); [wantMoves] asks for throttled move samples for an app-drawn preview.
+     */
+    fun setBrush(tool: Tool, widthPx: Float, liveInk: Boolean, wantMoves: Boolean) {}
 
     /** Extra lines for the debug overlay. */
     fun debugInfo(): List<String> = emptyList()

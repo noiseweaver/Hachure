@@ -1,10 +1,11 @@
 package app.hachure.model
 
 /**
- * A page of strokes. Sizes and coordinates are in mm.
+ * A page of strokes. Sizes and coordinates are in mm. List order is paint order.
  *
  * Mutable on purpose: the canvas appends strokes on every pen-up and copying the list each time
  * would allocate on the hot path. Callers outside the UI thread must take a [snapshot].
+ * Edits that should be undoable go through [History], not these methods directly.
  */
 class Page(
     val widthMm: Float,
@@ -24,6 +25,24 @@ class Page(
     fun add(stroke: Stroke) {
         _strokes += stroke
         if (stroke.id >= nextId) nextId = stroke.id + 1
+    }
+
+    /** Removes strokes by id. Returns them with their former indices, lowest index first. */
+    fun remove(ids: Set<Long>): List<IndexedValue<Stroke>> {
+        val removed = ArrayList<IndexedValue<Stroke>>()
+        for (i in _strokes.indices) if (_strokes[i].id in ids) removed += IndexedValue(i, _strokes[i])
+        for (k in removed.indices.reversed()) _strokes.removeAt(removed[k].index)
+        return removed
+    }
+
+    /** Puts back what [remove] returned, at the same paint positions. */
+    fun restore(removed: List<IndexedValue<Stroke>>) {
+        for (r in removed.sortedBy { it.index }) _strokes.add(r.index.coerceAtMost(_strokes.size), r.value)
+    }
+
+    fun removeLast(id: Long): Stroke? {
+        val i = _strokes.indexOfLast { it.id == id }
+        return if (i >= 0) _strokes.removeAt(i) else null
     }
 
     fun clear() = _strokes.clear()

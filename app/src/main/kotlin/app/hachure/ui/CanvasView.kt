@@ -7,11 +7,11 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Rect
-import android.graphics.RectF
 import android.os.SystemClock
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
+import app.hachure.geometry.Hit
 import app.hachure.geometry.PageTransform
 import app.hachure.geometry.Units
 import app.hachure.geometry.Vec2
@@ -22,25 +22,33 @@ import app.hachure.ink.InkListener
 import app.hachure.ink.MotionEventInkBackend
 import app.hachure.ink.OnyxInkBackend
 import app.hachure.ink.RawPoint
+import app.hachure.model.DotGrid
+import app.hachure.model.History
 import app.hachure.model.InkPoint
 import app.hachure.model.Page
 import app.hachure.model.Stroke
 import app.hachure.model.Tool
+import app.hachure.model.WidthPreset
+import app.hachure.model.straightLinePoints
+import app.hachure.render.OnyxStrokeRenderer
 import app.hachure.render.PageRenderer
+import app.hachure.render.StrokeRenderer
 
 /**
  * The drawing surface.
  *
- * Layers, bottom to top: paper (white), committed strokes bitmap, live stroke (only when the
- * backend does not render it). Guides and the dot grid join the stack in later milestones.
+ * Layers, bottom to top: paper (white) and dot grid, committed strokes (both in one bitmap), app
+ * live layer (live stroke when the backend does not ink it, line preview).
  *
- * Refresh rule: one invalidate per pen-up for the committed stroke. The live stroke uses small
- * dirty-rect invalidates and only when the backend cannot draw it itself.
+ * Refresh rule: one partial invalidate per pen-up, undo, redo or erase, covering only the
+ * strokes that changed. The live layer uses small dirty-rect invalidates.
  */
 class CanvasView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
 ) : View(context, attrs), InkListener {
+
+    enum class Mode { DRAW, LINE, ERASE }
 
     /** Reports point count and pen-up-to-commit time for the debug overlay. */
     fun interface StatsListener {
@@ -49,17 +57,35 @@ class CanvasView @JvmOverloads constructor(
 
     var statsListener: StatsListener? = null
 
+    /** Called after any change to undo or redo availability. */
+    var historyChanged: (() -> Unit)? = null
+
     /** Onyx on Boox devices, plain MotionEvent elsewhere or if the SDK fails to start. */
     var backend: InkBackend = InkBackends.create()
         private set
 
-    /** Pen width in mm. Fineliner 0.3 mm by default. */
-    var penWidthMm = 0.3f
+    var tool = Tool.PENCIL
+        set(value) { field = value; pushBrush() }
 
-    private val renderer = PageRenderer()
+    var widthPreset = WidthPreset.MEDIUM
+        set(value) { field = value; pushBrush() }
+
+    var mode = Mode.DRAW
+        set(value) { field = value; pushBrush() }
+
+    var dotGrid: DotGrid? = DotGrid()
+        set(value) {
+            field = value
+            rebuild(null)
+        }
+
     private val transform = PageTransform.forDpi(panelDpi())
+    private val appRenderer = PageRenderer()
+    private var strokeRenderer: StrokeRenderer = appRenderer
     private var page: Page? = null
+    private var history: History? = null
     private var committed: Bitmap? = null
+    private var committedCanvas: Canvas? = null
 
     private val livePath = Path()
     private val livePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -68,28 +94,44 @@ class CanvasView @JvmOverloads constructor(
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
     }
+    private var liveActive = false
+    private var lineStart: RawPoint? = null
+    private var lineEnd: RawPoint? = null
     private var lastLive: RawPoint? = null
     private val dirty = Rect()
-    private val tmpRectF = RectF()
 
     init {
         setBackgroundColor(Color.WHITE)
         isFocusable = false
     }
 
+    val canUndo get() = history?.canUndo == true
+    val canRedo get() = history?.canRedo == true
+
+    private fun widthPx() = transform.lengthToView(tool.widthMm(widthPreset)).coerceAtLeast(1f)
+
+    private fun pushBrush() {
+        backend.setBrush(tool, widthPx(), liveInk = mode == Mode.DRAW, wantMoves = mode == Mode.LINE)
+    }
+
+    /** The app draws feedback while the pen is down (no backend ink, or line preview). */
+    private fun appDrawsLive() = !backend.rendersLiveStroke || mode == Mode.LINE
+
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        (backend as? OnyxInkBackend)?.liveWidthPx = transform.lengthToView(penWidthMm).coerceAtLeast(1f)
         try {
+            pushBrush()
             backend.attach(this, this)
         } catch (t: Throwable) {
             fallBackToMotionEvent(t)
         }
+        updateRenderer()
     }
 
     override fun onBackendFailed(error: Throwable) {
         if (backend is MotionEventInkBackend) return
         fallBackToMotionEvent(error)
+        updateRenderer()
         backendChanged?.invoke()
     }
 
@@ -100,7 +142,21 @@ class CanvasView @JvmOverloads constructor(
         InkDiagnostics.backendFallbackReason = "${backend.name} failed: ${t.javaClass.simpleName}: ${t.message}"
         runCatching { backend.detach() }
         backend = MotionEventInkBackend().also { it.attach(this, this) }
+        pushBrush()
     }
+
+    /** SDK commit renderers only make sense when the SDK inks live. */
+    private fun updateRenderer() {
+        val onyx = backend as? OnyxInkBackend
+        strokeRenderer = if (onyx != null) {
+            OnyxStrokeRenderer(context, onyx.maxTouchPressure, appRenderer)
+        } else {
+            appRenderer
+        }
+        rebuild(null)
+    }
+
+    fun rendererError(): String? = (strokeRenderer as? OnyxStrokeRenderer)?.lastError
 
     override fun onDetachedFromWindow() {
         backend.detach()
@@ -111,19 +167,72 @@ class CanvasView @JvmOverloads constructor(
         super.onSizeChanged(w, h, oldw, oldh)
         if (w <= 0 || h <= 0) return
         if (page == null) {
-            page = Page(transform.lengthToPage(w.toFloat()), transform.lengthToPage(h.toFloat()))
+            page = Page(transform.lengthToPage(w.toFloat()), transform.lengthToPage(h.toFloat())).also {
+                history = History(it)
+            }
         }
         committed?.recycle()
-        committed = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also { bmp ->
-            bmp.eraseColor(Color.WHITE)
-            val c = Canvas(bmp)
-            page?.strokes?.forEach { renderer.drawStroke(c, it, transform) }
+        committed = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).also {
+            committedCanvas = Canvas(it)
         }
+        rebuild(null)
+    }
+
+    /**
+     * Repaints [region] (view px) of the committed bitmap from the model, or all of it when null,
+     * and invalidates that region.
+     */
+    private fun rebuild(region: Rect?) {
+        val bmp = committed ?: return
+        val c = committedCanvas ?: return
+        val r = region?.let { Rect(it).apply { intersect(0, 0, bmp.width, bmp.height) } }
+            ?: Rect(0, 0, bmp.width, bmp.height)
+        if (r.isEmpty) return
+        c.save()
+        c.clipRect(r)
+        c.drawColor(Color.WHITE)
+        dotGrid?.let {
+            appRenderer.drawGrid(c, it, transform, r.left.toFloat(), r.top.toFloat(), r.right.toFloat(), r.bottom.toFloat())
+        }
+        val tmp = Rect()
+        page?.strokes?.forEach { s ->
+            viewBounds(s, tmp)
+            if (Rect.intersects(tmp, r)) strokeRenderer.drawStroke(c, s, transform)
+        }
+        c.restore()
+        invalidate(r)
+    }
+
+    private fun viewBounds(s: Stroke, out: Rect) {
+        val b = s.bounds()
+        val a = transform.pageToView(Vec2(b.left, b.top))
+        val z = transform.pageToView(Vec2(b.right, b.bottom))
+        // Pressure renderers (brush, charcoal) can spread past the nominal width.
+        val pad = (transform.lengthToView(s.widthMm) + 3f).toInt()
+        out.set(a.x.toInt() - pad, a.y.toInt() - pad, z.x.toInt() + pad, z.y.toInt() + pad)
+    }
+
+    private fun regionOf(strokes: List<Stroke>): Rect? {
+        if (strokes.isEmpty()) return null
+        val out = Rect()
+        val tmp = Rect()
+        for (s in strokes) {
+            viewBounds(s, tmp)
+            out.union(tmp)
+        }
+        return out
     }
 
     override fun onDraw(canvas: Canvas) {
         committed?.let { canvas.drawBitmap(it, 0f, 0f, null) }
-        if (!livePath.isEmpty) canvas.drawPath(livePath, livePaint)
+        if (!liveActive) return
+        val s = lineStart
+        val e = lineEnd
+        if (mode == Mode.LINE && s != null && e != null) {
+            canvas.drawLine(s.x, s.y, e.x, e.y, livePaint)
+        } else if (!livePath.isEmpty) {
+            canvas.drawPath(livePath, livePaint)
+        }
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean =
@@ -136,70 +245,119 @@ class CanvasView @JvmOverloads constructor(
 
     fun cleanScreen() = backend.cleanScreen(this)
 
-    fun clearPage() {
-        page?.clear()
-        committed?.eraseColor(Color.WHITE)
-        livePath.rewind()
-        invalidate()
+    fun clearPage() = applyChange(history?.clear().orEmpty())
+
+    fun undo() = applyChange(history?.undo().orEmpty())
+
+    fun redo() = applyChange(history?.redo().orEmpty())
+
+    private fun applyChange(changed: List<Stroke>) {
+        regionOf(changed)?.let { rebuild(it) }
+        historyChanged?.invoke()
     }
 
     // InkListener
 
     override fun onStrokeBegin(point: RawPoint) {
-        if (backend.rendersLiveStroke) return
-        livePaint.strokeWidth = transform.lengthToView(penWidthMm).coerceAtLeast(1f)
+        if (!appDrawsLive() || mode == Mode.ERASE) return
+        livePaint.strokeWidth = widthPx()
+        liveActive = true
         livePath.rewind()
         livePath.moveTo(point.x, point.y)
+        lineStart = point
+        lineEnd = point
         lastLive = point
-        invalidateAround(point, point)
+        invalidateSegment(point, point)
     }
 
     override fun onStrokeMove(points: List<RawPoint>) {
-        if (backend.rendersLiveStroke || points.isEmpty()) return
-        var prev = lastLive ?: points.first()
+        if (!liveActive || points.isEmpty()) return
         dirty.setEmpty()
-        for (p in points) {
-            livePath.lineTo(p.x, p.y)
-            unionSegment(prev, p)
-            prev = p
+        if (mode == Mode.LINE) {
+            val s = lineStart ?: return
+            lineEnd?.let { unionSegment(s, it) }
+            val e = points.last()
+            lineEnd = e
+            unionSegment(s, e)
+        } else {
+            var prev = lastLive ?: points.first()
+            for (p in points) {
+                livePath.lineTo(p.x, p.y)
+                unionSegment(prev, p)
+                prev = p
+            }
+            lastLive = prev
         }
-        lastLive = prev
         invalidate(dirty)
     }
 
     override fun onStrokeEnd(points: List<RawPoint>, penUpUptime: Long) {
+        when (mode) {
+            Mode.ERASE -> erase(points, ERASER_TOOL_RADIUS_MM)
+            Mode.LINE -> commit(points, penUpUptime, straight = true)
+            Mode.DRAW -> commit(points, penUpUptime, straight = false)
+        }
+        endLive()
+    }
+
+    override fun onEraseEnd(points: List<RawPoint>, penUpUptime: Long) {
+        erase(points, ERASER_END_RADIUS_MM)
+        endLive()
+    }
+
+    private fun endLive() {
+        if (!liveActive) return
+        dirty.setEmpty()
+        val s = lineStart
+        val e = lineEnd
+        if (s != null && e != null) unionSegment(s, e)
+        val pathBounds = android.graphics.RectF()
+        livePath.computeBounds(pathBounds, true)
+        if (!pathBounds.isEmpty) {
+            val pad = (livePaint.strokeWidth + 4f).toInt()
+            dirty.union(pathBounds.left.toInt() - pad, pathBounds.top.toInt() - pad, pathBounds.right.toInt() + pad, pathBounds.bottom.toInt() + pad)
+        }
+        liveActive = false
+        livePath.rewind()
+        lineStart = null
+        lineEnd = null
+        lastLive = null
+        if (!dirty.isEmpty) invalidate(dirty)
+    }
+
+    private fun commit(points: List<RawPoint>, penUpUptime: Long, straight: Boolean) {
         val pg = page ?: return
-        val bmp = committed ?: return
+        val h = history ?: return
+        if (points.isEmpty()) return
         val renderStart = SystemClock.uptimeMillis()
         val t0 = points.first().timeMs
-        val stroke = Stroke(
-            id = pg.newStrokeId(),
-            tool = Tool.PEN,
-            widthMm = penWidthMm,
-            points = points.map { toPage(it, t0) },
-        )
-        pg.add(stroke)
-        renderer.drawStroke(Canvas(bmp), stroke, transform)
-        livePath.rewind()
-        lastLive = null
-
-        val b = stroke.bounds()
-        tmpRectF.set(
-            transform.pageToView(Vec2(b.left, b.top)).x,
-            transform.pageToView(Vec2(b.left, b.top)).y,
-            transform.pageToView(Vec2(b.right, b.bottom)).x,
-            transform.pageToView(Vec2(b.right, b.bottom)).y,
-        )
-        tmpRectF.roundOut(dirty)
-        dirty.inset(-2, -2)
-        invalidate(dirty)
+        val inkPoints = if (straight && points.size > 1) {
+            val a = transform.viewToPage(Vec2(points.first().x, points.first().y))
+            val b = transform.viewToPage(Vec2(points.last().x, points.last().y))
+            val pressure = points.map { it.pressure }.sorted()[points.size / 2]
+            straightLinePoints(a.x, a.y, b.x, b.y, pressure, (points.last().timeMs - t0).coerceAtLeast(0))
+        } else {
+            points.map { toPage(it, t0) }
+        }
+        val stroke = Stroke(pg.newStrokeId(), tool, tool.widthMm(widthPreset), inkPoints)
+        h.add(stroke)
+        val c = committedCanvas ?: return
+        strokeRenderer.drawStroke(c, stroke, transform)
+        regionOf(listOf(stroke))?.let { invalidate(it) }
+        historyChanged?.invoke()
 
         val now = SystemClock.uptimeMillis()
         statsListener?.onStrokeCommitted(points.size, now - penUpUptime, now - renderStart)
     }
 
-    override fun onEraseEnd(points: List<RawPoint>, penUpUptime: Long) {
-        // Stroke eraser arrives in Milestone 3.
+    private fun erase(points: List<RawPoint>, radiusMm: Float) {
+        val pg = page ?: return
+        val h = history ?: return
+        if (points.isEmpty()) return
+        val t0 = points.first().timeMs
+        val path = points.map { toPage(it, t0) }
+        val ids = Hit.strokesTouched(pg.strokes, path, radiusMm)
+        applyChange(h.erase(ids))
     }
 
     private fun toPage(p: RawPoint, t0: Long): InkPoint {
@@ -216,16 +374,15 @@ class CanvasView @JvmOverloads constructor(
         if (dirty.isEmpty) dirty.set(l, t, r, btm) else dirty.union(l, t, r, btm)
     }
 
-    private fun invalidateAround(a: RawPoint, b: RawPoint) {
+    private fun invalidateSegment(a: RawPoint, b: RawPoint) {
         dirty.setEmpty()
         unionSegment(a, b)
         invalidate(dirty)
     }
 
     /**
-     * Physical density. On the Note Air 2 this should report about 227 (inferred, not yet
-     * confirmed on device; the debug overlay shows it). Falls back to the density bucket when
-     * the reported value is implausible, as on some emulators.
+     * Physical density. On the Note Air 2 this reports 227.1 (verified on device 2026-11-08).
+     * Falls back to the density bucket when the reported value is implausible.
      */
     private fun panelDpi(): Float {
         val dm = resources.displayMetrics
@@ -234,4 +391,15 @@ class CanvasView @JvmOverloads constructor(
     }
 
     fun reportedDpi(): Float = transform.scale * Units.MM_PER_INCH
+
+    /** Pixels for a length in mm on this panel, for sizing UI in physical units. */
+    fun mmToPx(mm: Float): Float = transform.lengthToView(mm)
+
+    private companion object {
+        /** Eraser tool on the rail: a fine eraser for picking out single hatch lines. */
+        const val ERASER_TOOL_RADIUS_MM = 1.0f
+
+        /** Eraser end of the stylus: broader, like rubbing out. */
+        const val ERASER_END_RADIUS_MM = 2.5f
+    }
 }

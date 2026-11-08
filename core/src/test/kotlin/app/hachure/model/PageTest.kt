@@ -5,7 +5,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PageTest {
-    private fun stroke(id: Long) = Stroke(id, Tool.PEN, 0.3f, listOf(InkPoint(0f, 0f, 1f, 0)))
+    private fun stroke(id: Long) = Stroke(id, Tool.PENCIL, 0.3f, listOf(InkPoint(0f, 0f, 1f, 0)))
 
     @Test fun idsIncreaseAndSkipPastLoadedIds() {
         val page = Page(100f, 100f)

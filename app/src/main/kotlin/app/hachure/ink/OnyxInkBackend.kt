@@ -14,6 +14,7 @@ import com.onyx.android.sdk.data.note.TouchPoint
 import com.onyx.android.sdk.pen.RawInputCallback
 import com.onyx.android.sdk.pen.TouchHelper
 import com.onyx.android.sdk.pen.data.TouchPointList
+import app.hachure.model.Tool
 import java.util.Locale
 
 /**
@@ -31,25 +32,36 @@ class OnyxInkBackend : InkBackend {
     override val rendersLiveStroke = true
 
     /**
-     * Every live A2 stroke style the SDK offers ([V] constants 0..6 in 1.4.12). All are drawing
-     * options. Neo brush and charcoal v2 are disabled by default in the notable app over crash
-     * reports [I], so they are labelled experimental.
+     * Live A2 stroke style for the current brush ([V] STROKE_STYLE_* constants 0..6 in 1.4.12).
+     * Neo brush and charcoal v2 are disabled by default in the notable app over crash reports
+     * [I], so the UI labels them experimental.
      */
-    enum class LiveStyle(val label: String, val sdkValue: Int) {
-        PENCIL("pencil", TouchHelper.STROKE_STYLE_PENCIL),
-        FOUNTAIN("fountain", TouchHelper.STROKE_STYLE_FOUNTAIN),
-        MARKER("marker", TouchHelper.STROKE_STYLE_MARKER),
-        NEO_BRUSH("brush (exp)", TouchHelper.STROKE_STYLE_NEO_BRUSH),
-        CHARCOAL("charcoal", TouchHelper.STROKE_STYLE_CHARCOAL),
-        DASH("dash", TouchHelper.STROKE_STYLE_DASH),
-        CHARCOAL_V2("charcoal 2 (exp)", TouchHelper.STROKE_STYLE_CHARCOAL_V2),
-    }
-
-    var liveStyle = LiveStyle.PENCIL
+    var liveTool = Tool.PENCIL
         set(value) {
             field = value
-            helper?.setStrokeStyle(value.sdkValue)
+            helper?.setStrokeStyle(sdkStyle(value))
         }
+
+    /**
+     * False while the line or eraser tool is active: the SDK still reports points but must not
+     * ink them. [I per docs] setRawDrawingRenderEnabled(false) keeps callbacks flowing.
+     * [G] that move callbacks keep arriving with render off (needed for the line preview).
+     */
+    var liveInk = true
+        set(value) {
+            if (field == value) return
+            field = value
+            appliedActive = null
+            applyEnabled()
+        }
+
+    /** Wants move samples (line preview). Only sent while [liveInk] is off, throttled. */
+    var wantMoves = false
+
+    /** [V] EpdController.getMaxTouchPressure() exists. [I] about 4095 on Wacom EMR panels. */
+    val maxTouchPressure: Float by lazy {
+        runCatching { EpdController.getMaxTouchPressure() }.getOrNull()?.takeIf { it > 1f } ?: 4095f
+    }
 
     /** Live A2 stroke width in px. */
     var liveWidthPx = 3f
@@ -212,8 +224,15 @@ class OnyxInkBackend : InkBackend {
         target.postDelayed({ applyEnabled() }, 300)
     }
 
+    override fun setBrush(tool: Tool, widthPx: Float, liveInk: Boolean, wantMoves: Boolean) {
+        liveTool = tool
+        liveWidthPx = widthPx
+        this.wantMoves = wantMoves
+        this.liveInk = liveInk
+    }
+
     override fun debugInfo(): List<String> = buildList {
-        add("A2 live: ${liveStyle.label} ${String.format(Locale.US, "%.1f", liveWidthPx)}px, coords ${if (pointsAreScreenAbsolute) "screen" else "view"}")
+        add("A2 live: ${liveTool.id}${if (liveInk) "" else " (ink off)"} ${String.format(Locale.US, "%.1f", liveWidthPx)}px, coords ${if (pointsAreScreenAbsolute) "screen" else "view"}")
         add("limit $limitRect, ${excludeRects.size} exclude, reopens $reopenCount")
         add("release when pen away: ${if (releaseWhenPenAway) "on" else "off"}, pen ${if (penNear) "near" else "away"}, wakes $wakeCount")
         if (lastListDelayMs >= 0) add("pen-up to point list: $lastListDelayMs ms")
@@ -262,11 +281,11 @@ class OnyxInkBackend : InkBackend {
 
     private fun configureAndOpen(h: TouchHelper) {
         h.setStrokeWidth(liveWidthPx)
-        h.setStrokeStyle(liveStyle.sdkValue)
+        h.setStrokeStyle(sdkStyle(liveTool))
         h.setStrokeColor(Color.BLACK)
         h.setLimitRect(mutableListOf(Rect(limitRect)), excludeRects.map { Rect(it) }.toMutableList())
         h.openRawDrawing()
-        h.setRawDrawingRenderEnabled(true)
+        h.setRawDrawingRenderEnabled(liveInk)
         // [V] No SDK refresh at pen-up: the app's single commit invalidate replaces it.
         h.setPenUpRefreshEnabled(false)
         // [I] Default true per docs; set explicitly so a stylus button press does not erase.
@@ -300,7 +319,7 @@ class OnyxInkBackend : InkBackend {
         if (active == appliedActive) return
         runCatching {
             if (active) {
-                h.setRawDrawingRenderEnabled(true)
+                h.setRawDrawingRenderEnabled(liveInk)
                 h.setRawDrawingEnabled(true)
             } else {
                 h.setRawDrawingEnabled(false)
@@ -340,8 +359,15 @@ class OnyxInkBackend : InkBackend {
         }
 
         override fun onRawDrawingTouchPointMoveReceived(p: TouchPoint) {
-            // Points arrive again in full in the list callback. No invalidate here: each one
-            // would cost a 100 to 300 ms e-ink refresh.
+            // Points arrive again in full in the list callback. While the SDK inks live they are
+            // ignored: each app invalidate would cost a 100 to 300 ms e-ink refresh. The line
+            // preview takes them, throttled to one per MOVE_THROTTLE_MS.
+            if (!wantMoves || liveInk) return
+            val now = SystemClock.uptimeMillis()
+            if (now - lastMoveSent < MOVE_THROTTLE_MS) return
+            lastMoveSent = now
+            val rp = toRaw(p)
+            main.post { listener?.onStrokeMove(listOf(rp)) }
         }
 
         override fun onEndRawDrawing(b: Boolean, p: TouchPoint) {
@@ -399,7 +425,22 @@ class OnyxInkBackend : InkBackend {
         return RawPoint(x, y, pressure.coerceIn(0f, 1f), p.timestamp)
     }
 
+    @Volatile private var lastMoveSent = 0L
+
     private companion object {
+        /** Line preview refresh interval. [G] fast enough to feel live in A2, slow enough to keep up. */
+        const val MOVE_THROTTLE_MS = 60L
+
+        fun sdkStyle(t: Tool): Int = when (t) {
+            Tool.PENCIL -> TouchHelper.STROKE_STYLE_PENCIL
+            Tool.FOUNTAIN -> TouchHelper.STROKE_STYLE_FOUNTAIN
+            Tool.MARKER -> TouchHelper.STROKE_STYLE_MARKER
+            Tool.BRUSH -> TouchHelper.STROKE_STYLE_NEO_BRUSH
+            Tool.CHARCOAL -> TouchHelper.STROKE_STYLE_CHARCOAL
+            Tool.DASH -> TouchHelper.STROKE_STYLE_DASH
+            Tool.CHARCOAL2 -> TouchHelper.STROKE_STYLE_CHARCOAL_V2
+        }
+
         /** Release the SDK this long after the last pen activity. */
         const val PEN_IDLE_MS = 1500L
     }

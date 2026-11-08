@@ -2,7 +2,5 @@
 <resources>
     <color name="paper">#FFFFFFFF</color>
     <color name="ink">#FF000000</color>
-    <color name="toolbar_bg">#FFFFFFFF</color>
-    <color name="toolbar_rule">#FF000000</color>
     <color name="debug_bg">#E6FFFFFF</color>
 </resources>
