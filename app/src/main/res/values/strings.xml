@@ -2,8 +2,12 @@
 <resources>
     <string name="app_name">Hachure</string>
     <string name="action_clear">Clear</string>
+    <string name="action_clean">Clean</string>
     <string name="action_debug">Debug</string>
+    <string name="live_style">A2: %1$s</string>
+    <string name="coords_screen">Pts: screen</string>
+    <string name="coords_view">Pts: view</string>
     <string name="debug_backend">Backend: %1$s</string>
-    <string name="debug_last_stroke">Last stroke: %1$d pts, input to commit %2$d ms</string>
+    <string name="debug_last_stroke">Last stroke: %1$d pts, pen-up to commit %2$d ms (render %3$d ms)</string>
     <string name="debug_no_strokes">No strokes yet</string>
 </resources>

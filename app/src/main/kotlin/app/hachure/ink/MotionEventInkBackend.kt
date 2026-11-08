@@ -24,7 +24,6 @@ class MotionEventInkBackend : InkBackend {
 
     private val current = ArrayList<RawPoint>(512)
     private var activeTool = MotionEvent.TOOL_TYPE_UNKNOWN
-    private val viewOnScreen = IntArray(2)
 
     override fun attach(view: View, listener: InkListener) {
         this.view = view
@@ -54,6 +53,10 @@ class MotionEventInkBackend : InkBackend {
         cancel()
         view = null
         listener = null
+    }
+
+    override fun cleanScreen(target: View) {
+        target.invalidate()
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -89,7 +92,11 @@ class MotionEventInkBackend : InkBackend {
                 if (current.last().x != last.x || current.last().y != last.y) current += last
                 val stroke = ArrayList(current)
                 current.clear()
-                if (activeTool == MotionEvent.TOOL_TYPE_ERASER) l.onEraseEnd(stroke) else l.onStrokeEnd(stroke)
+                if (activeTool == MotionEvent.TOOL_TYPE_ERASER) {
+                    l.onEraseEnd(stroke, event.eventTime)
+                } else {
+                    l.onStrokeEnd(stroke, event.eventTime)
+                }
                 return true
             }
 

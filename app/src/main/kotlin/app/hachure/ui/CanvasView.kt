@@ -16,8 +16,11 @@ import app.hachure.geometry.PageTransform
 import app.hachure.geometry.Units
 import app.hachure.geometry.Vec2
 import app.hachure.ink.InkBackend
+import app.hachure.ink.InkBackends
+import app.hachure.ink.InkDiagnostics
 import app.hachure.ink.InkListener
 import app.hachure.ink.MotionEventInkBackend
+import app.hachure.ink.OnyxInkBackend
 import app.hachure.ink.RawPoint
 import app.hachure.model.InkPoint
 import app.hachure.model.Page
@@ -39,14 +42,16 @@ class CanvasView @JvmOverloads constructor(
     attrs: AttributeSet? = null,
 ) : View(context, attrs), InkListener {
 
-    /** Reports backend name, point count and input-to-commit time for the debug overlay. */
+    /** Reports point count and pen-up-to-commit time for the debug overlay. */
     fun interface StatsListener {
-        fun onStrokeCommitted(backend: String, points: Int, inputToCommitMs: Long)
+        fun onStrokeCommitted(points: Int, penUpToCommitMs: Long, renderMs: Long)
     }
 
     var statsListener: StatsListener? = null
 
-    val backend: InkBackend = MotionEventInkBackend()
+    /** Onyx on Boox devices, plain MotionEvent elsewhere or if the SDK fails to start. */
+    var backend: InkBackend = InkBackends.create()
+        private set
 
     /** Pen width in mm. Fineliner 0.3 mm by default. */
     var penWidthMm = 0.3f
@@ -74,7 +79,27 @@ class CanvasView @JvmOverloads constructor(
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        backend.attach(this, this)
+        (backend as? OnyxInkBackend)?.liveWidthPx = transform.lengthToView(penWidthMm).coerceAtLeast(1f)
+        try {
+            backend.attach(this, this)
+        } catch (t: Throwable) {
+            fallBackToMotionEvent(t)
+        }
+    }
+
+    override fun onBackendFailed(error: Throwable) {
+        if (backend is MotionEventInkBackend) return
+        fallBackToMotionEvent(error)
+        backendChanged?.invoke()
+    }
+
+    /** Called when the backend switches at runtime, so exclude rects can be re-sent. */
+    var backendChanged: (() -> Unit)? = null
+
+    private fun fallBackToMotionEvent(t: Throwable) {
+        InkDiagnostics.backendFallbackReason = "${backend.name} failed: ${t.javaClass.simpleName}: ${t.message}"
+        runCatching { backend.detach() }
+        backend = MotionEventInkBackend().also { it.attach(this, this) }
     }
 
     override fun onDetachedFromWindow() {
@@ -103,6 +128,8 @@ class CanvasView @JvmOverloads constructor(
 
     override fun onTouchEvent(event: MotionEvent): Boolean =
         backend.onTouchEvent(event) || super.onTouchEvent(event)
+
+    fun cleanScreen() = backend.cleanScreen(this)
 
     fun clearPage() {
         page?.clear()
@@ -135,9 +162,10 @@ class CanvasView @JvmOverloads constructor(
         invalidate(dirty)
     }
 
-    override fun onStrokeEnd(points: List<RawPoint>) {
+    override fun onStrokeEnd(points: List<RawPoint>, penUpUptime: Long) {
         val pg = page ?: return
         val bmp = committed ?: return
+        val renderStart = SystemClock.uptimeMillis()
         val t0 = points.first().timeMs
         val stroke = Stroke(
             id = pg.newStrokeId(),
@@ -161,11 +189,11 @@ class CanvasView @JvmOverloads constructor(
         dirty.inset(-2, -2)
         invalidate(dirty)
 
-        val commitMs = SystemClock.uptimeMillis() - points.last().timeMs
-        statsListener?.onStrokeCommitted(backend.name, points.size, commitMs)
+        val now = SystemClock.uptimeMillis()
+        statsListener?.onStrokeCommitted(points.size, now - penUpUptime, now - renderStart)
     }
 
-    override fun onEraseEnd(points: List<RawPoint>) {
+    override fun onEraseEnd(points: List<RawPoint>, penUpUptime: Long) {
         // Stroke eraser arrives in Milestone 3.
     }
 

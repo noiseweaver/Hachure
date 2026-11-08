@@ -3,8 +3,8 @@
 A sketching app for the Onyx BOOX Note Air 2 (e-ink, Wacom EMR stylus), built around low-latency
 inking and precise rulers and perspective guides for hatching.
 
-Status: Milestone 1. Blank canvas, fineliner pen with plain `MotionEvent` input, CI that builds a
-signed release APK. The Onyx pen SDK backend lands in Milestone 2.
+Status: Milestone 2. Onyx pen SDK backend with fast A2 live ink on Boox devices, plain
+`MotionEvent` input elsewhere, debug overlay with stroke timing.
 
 ## Install on the Boox with Obtainium (no cable, no adb)
 
@@ -122,7 +122,41 @@ rects the Onyx SDK needs come directly from `getGlobalVisibleRect` on real views
 
 ## Onyx SDK dependencies
 
-Added in Milestone 2 from `https://repo.boox.com/repository/maven-public/`. CI already probes that
-repository on every build and writes the result to the job summary. If GitHub runners cannot
-reach it, the fallback is vendored AARs in `app/libs/`; the refresh steps will be documented here
-when that fallback is needed.
+The Onyx pen SDK is vendored as AARs in `app/libs/` with pinned SHA-256 sums in
+`app/libs/SHA256SUMS`. CI checks the sums on every build and fails if `TouchHelper`, `EpdController`
+or the native pen reader are missing from the APK.
+
+| AAR | Version |
+| --- | --- |
+| `onyxsdk-pen` | 1.4.12 |
+| `onyxsdk-base` | 1.7.7 |
+| `onyxsdk-device` | 1.2.31 |
+
+`hiddenapibypass` 4.3 and RxJava 2 come from Maven Central.
+
+Why vendored: `repo.boox.com` only offers a weak Diffie-Hellman key exchange, which current
+OpenSSL and Java refuse ("dh key too small"). Vendoring keeps that exception out of normal builds
+and makes builds independent of Boox's server.
+
+The Onyx AARs declare permissions (Wi-Fi, Bluetooth, storage, overlay and more). The app manifest
+removes all of them and CI fails if the APK declares any permission.
+
+### Refreshing the AARs
+
+1. Edit the versions in `.github/workflows/vendor-onyx.yml` (and the file names in
+   `app/build.gradle.kts` if they change).
+2. On GitHub, open **Actions > Vendor Onyx SDK > Run workflow** and pick your branch. The
+   workflow downloads the AARs (relaxing TLS for those requests only), regenerates `SHA256SUMS`
+   and commits both to that branch.
+3. Pull the branch and check the diff of `SHA256SUMS` before merging.
+
+## Debug overlay
+
+Tap **Debug** in the toolbar. It shows the active backend (and why it fell back, if it did), the
+device, the hidden API bypass result, panel dpi, app version, the SDK limit and exclude rects, and
+per stroke the time from pen-up to the stroke being committed. On Onyx devices two extra toolbar
+buttons appear: **A2** cycles the SDK's live stroke style (pencil, fountain, marker), and **Pts**
+switches how SDK point coordinates are read (screen or view) in case committed strokes land offset
+from the live ink.
+
+**Clean** does a single full refresh to clear e-ink ghosting. It never runs automatically.

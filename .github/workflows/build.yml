@@ -63,16 +63,32 @@ jobs:
             echo "::warning::No release key (fork PR or secrets not set). APK is signed with a throwaway debug key and will not update a release install."
           fi
 
-      - name: Probe Onyx Maven repo
-        # Informational until Milestone 2 adds the Onyx dependencies.
-        continue-on-error: true
-        run: |
-          url=https://repo.boox.com/repository/maven-public/com/onyx/android/sdk/onyxsdk-pen/1.4.12/onyxsdk-pen-1.4.12.pom
-          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$url" || echo "fail")
-          echo "repo.boox.com onyxsdk-pen POM: HTTP $code" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Verify vendored Onyx AARs
+        run: cd app/libs && sha256sum -c SHA256SUMS
 
       - name: Unit tests, lint, release APK
         run: ./gradlew --stacktrace :core:test :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease
+
+      - name: Check APK contents
+        run: |
+          # No pipefail: grep -q exits early and would turn SIGPIPE into a false failure.
+          set -eu
+          apk=app/build/outputs/apk/release/app-release.apk
+          # A broken Onyx dependency must fail here, not on the device.
+          if ! unzip -p "$apk" 'classes*.dex' | strings | grep -q 'Lcom/onyx/android/sdk/pen/TouchHelper;'; then
+            echo "::error::TouchHelper is not in the APK's dex."; exit 1
+          fi
+          for cls in 'Lcom/onyx/android/sdk/api/device/epd/EpdController;' 'Lcom/onyx/android/sdk/utils/DeviceFeatureUtil;' 'Lorg/lsposed/hiddenapibypass/HiddenApiBypass;' 'Lio/reactivex/Observable;'; do
+            unzip -p "$apk" 'classes*.dex' | strings | grep -q "$cls" || { echo "::error::$cls missing from dex."; exit 1; }
+          done
+          unzip -l "$apk" | grep -q 'lib/arm64-v8a/libonyx_pen_touch_reader.so' || { echo "::error::Onyx native reader missing."; exit 1; }
+          # No permissions at all: no network, no storage, nothing the Onyx AARs try to add.
+          aapt2=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)aapt2
+          perms=$("$aapt2" dump permissions "$apk" | grep -i 'uses-permission' || true)
+          if [ -n "$perms" ]; then
+            echo "::error::APK declares permissions:"; echo "$perms"; exit 1
+          fi
+          echo "APK checks passed: Onyx classes and native reader present, no permissions." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Collect APK
         run: |

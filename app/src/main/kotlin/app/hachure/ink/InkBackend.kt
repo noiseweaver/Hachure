@@ -10,11 +10,11 @@ data class RawPoint(
     val y: Float,
     /** Normalised 0..1. */
     val pressure: Float,
-    /** Event time, [android.os.SystemClock.uptimeMillis] base. */
+    /** Sample time in ms. The base is backend-specific; only differences within a stroke count. */
     val timeMs: Long,
 )
 
-/** Callbacks from a backend. All are delivered on the UI thread. */
+/** Callbacks from a backend. All are delivered on the UI thread, in view-local pixels. */
 interface InkListener {
     fun onStrokeBegin(point: RawPoint)
 
@@ -24,11 +24,17 @@ interface InkListener {
      */
     fun onStrokeMove(points: List<RawPoint>)
 
-    /** Pen up. [points] is the complete stroke, including the first sample. */
-    fun onStrokeEnd(points: List<RawPoint>)
+    /**
+     * Pen up. [points] is the complete stroke, including the first sample. [penUpUptime] is when
+     * the backend learned of the pen-up, in [android.os.SystemClock.uptimeMillis] base.
+     */
+    fun onStrokeEnd(points: List<RawPoint>, penUpUptime: Long)
 
     /** Stylus eraser end: complete erase path. */
-    fun onEraseEnd(points: List<RawPoint>)
+    fun onEraseEnd(points: List<RawPoint>, penUpUptime: Long)
+
+    /** The backend cannot continue (for example the SDK failed to open). Switch to another. */
+    fun onBackendFailed(error: Throwable)
 }
 
 /**
@@ -63,4 +69,10 @@ interface InkBackend {
     fun resume()
 
     fun detach()
+
+    /** One full-quality refresh to clear e-ink ghosting. Never called automatically. */
+    fun cleanScreen(target: View)
+
+    /** Extra lines for the debug overlay. */
+    fun debugInfo(): List<String> = emptyList()
 }
