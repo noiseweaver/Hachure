@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Plain platform theme: no AppCompat, no animations that cost e-ink refreshes. -->
+    <style name="Theme.Hachure" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/paper</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowContentTransitions">false</item>
+        <item name="android:statusBarColor">@color/paper</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:navigationBarColor">@color/paper</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+
+    <style name="ToolbarButton" parent="android:Widget.Material.Light.Button.Borderless">
+        <item name="android:textColor">@color/ink</item>
+        <item name="android:textSize">18sp</item>
+        <item name="android:minWidth">72dp</item>
+        <item name="android:minHeight">56dp</item>
+        <item name="android:stateListAnimator">@null</item>
+        <item name="android:background">@null</item>
+    </style>
+</resources>

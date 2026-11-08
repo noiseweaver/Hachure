@@ -1,0 +1,126 @@
+name: Build
+
+# One workflow for branch builds and tag releases, so github.run_number (used as versionCode)
+# is a single increasing counter and any later build can install over any earlier one.
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      VERSION_CODE: ${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Version name
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "VERSION_NAME=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else
+            echo "VERSION_NAME=0.0.${GITHUB_RUN_NUMBER}-${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Decode release keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            {
+              echo "KEYSTORE_PATH=$RUNNER_TEMP/release.jks"
+              echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+              echo "KEY_ALIAS=$KEY_ALIAS"
+              echo "KEY_PASSWORD=$KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
+            echo "Signing with the release key."
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "::error::Release tags need the KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS and KEY_PASSWORD secrets."
+            exit 1
+          else
+            echo "::warning::No release key (fork PR or secrets not set). APK is signed with a throwaway debug key and will not update a release install."
+          fi
+
+      - name: Probe Onyx Maven repo
+        # Informational until Milestone 2 adds the Onyx dependencies.
+        continue-on-error: true
+        run: |
+          url=https://repo.boox.com/repository/maven-public/com/onyx/android/sdk/onyxsdk-pen/1.4.12/onyxsdk-pen-1.4.12.pom
+          code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$url" || echo "fail")
+          echo "repo.boox.com onyxsdk-pen POM: HTTP $code" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Unit tests, lint, release APK
+        run: ./gradlew --stacktrace :core:test :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease
+
+      - name: Collect APK
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk "dist/hachure-${VERSION_NAME}.apk"
+          apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner
+          {
+            echo "### APK"
+            echo "- versionName \`$VERSION_NAME\`, versionCode \`$VERSION_CODE\`"
+            echo "- Signer certificate:"
+            echo '```'
+            "$apksigner" verify --print-certs "dist/hachure-${VERSION_NAME}.apk" | grep -E 'SHA-256|DN'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hachure-${{ env.VERSION_NAME }}
+          path: dist/*.apk
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reports-${{ github.run_number }}
+          path: |
+            app/build/reports/
+            core/build/reports/
+          if-no-files-found: ignore
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: hachure-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/*.apk \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes
