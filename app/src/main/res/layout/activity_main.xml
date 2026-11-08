@@ -45,6 +45,13 @@
                 android:visibility="gone" />
 
             <Button
+                android:id="@+id/btn_release"
+                style="@style/ToolbarButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:visibility="gone" />
+
+            <Button
                 android:id="@+id/btn_coords"
                 style="@style/ToolbarButton"
                 android:layout_width="wrap_content"

@@ -7,6 +7,8 @@
     <string name="live_style">Style: %1$s</string>
     <string name="coords_screen">Pts: screen</string>
     <string name="coords_view">Pts: view</string>
+    <string name="release_on">Release: on</string>
+    <string name="release_off">Release: off</string>
     <string name="debug_backend">Backend: %1$s</string>
     <string name="debug_last_stroke">Last stroke: %1$d pts, pen-up to commit %2$d ms (render %3$d ms)</string>
     <string name="debug_no_strokes">No strokes yet</string>

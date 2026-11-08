@@ -66,6 +66,24 @@ class OnyxInkBackend : InkBackend {
      */
     var pointsAreScreenAbsolute = false
 
+    /**
+     * Release the SDK whenever the pen is away, so Boox system gestures (status bar, settings
+     * pull-down) work. The SDK's raw drawing claim blocks them while enabled ([V] on device
+     * 2026-11-08; the docs describe the same). [G] Disabling raw drawing releases the claim and
+     * re-enabling on pen proximity is fast enough not to lose the start of a stroke.
+     */
+    var releaseWhenPenAway = true
+        set(value) {
+            field = value
+            applyEnabled()
+        }
+
+    /** Pen is near the canvas: hovering, drawing, or recently lifted. */
+    private var penNear = false
+    private var strokeInProgress = false
+    private var wakeCount = 0
+    private val idleRelease = Runnable { onPenIdle() }
+
     private var view: View? = null
     private var listener: InkListener? = null
     private var helper: TouchHelper? = null
@@ -102,6 +120,7 @@ class OnyxInkBackend : InkBackend {
     override fun detach() {
         val v = view
         v?.viewTreeObserver?.removeOnGlobalLayoutListener(layoutListener)
+        main.removeCallbacks(idleRelease)
         helper?.let {
             runCatching { it.setRawDrawingEnabled(false) }
             // [V] closeRawDrawing releases the native reader and the A2 claim.
@@ -142,9 +161,39 @@ class OnyxInkBackend : InkBackend {
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         // The SDK reads the digitizer directly. Swallow stylus MotionEvents so the view does not
-        // act on them; fingers pass through (they never draw).
+        // act on them; fingers pass through (they never draw). A stylus event here also means the
+        // SDK was released, so wake it.
         val tool = event.getToolType(0)
-        return tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER
+        val isPen = tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER
+        if (isPen) onPenActivity()
+        return isPen
+    }
+
+    override fun onHoverEvent(event: MotionEvent) {
+        val tool = event.getToolType(0)
+        if (tool != MotionEvent.TOOL_TYPE_STYLUS && tool != MotionEvent.TOOL_TYPE_ERASER) return
+        // Any hover sample, including exit, counts as activity; the idle timer handles release.
+        onPenActivity()
+    }
+
+    /** Main thread only. */
+    private fun onPenActivity() {
+        main.removeCallbacks(idleRelease)
+        if (!penNear) {
+            penNear = true
+            wakeCount++
+            applyEnabled()
+        }
+        main.postDelayed(idleRelease, PEN_IDLE_MS)
+    }
+
+    private fun onPenIdle() {
+        if (strokeInProgress) {
+            main.postDelayed(idleRelease, PEN_IDLE_MS)
+            return
+        }
+        penNear = false
+        applyEnabled()
     }
 
     override fun cleanScreen(target: View) {
@@ -152,6 +201,7 @@ class OnyxInkBackend : InkBackend {
         // inking is paused around it. [V] EpdController.invalidate(View, UpdateMode) exists.
         val h = helper
         runCatching { h?.setRawDrawingEnabled(false) }
+        appliedActive = null
         try {
             EpdController.invalidate(target.rootView, UpdateMode.GC)
         } catch (t: Throwable) {
@@ -165,6 +215,7 @@ class OnyxInkBackend : InkBackend {
     override fun debugInfo(): List<String> = buildList {
         add("A2 live: ${liveStyle.label} ${String.format(Locale.US, "%.1f", liveWidthPx)}px, coords ${if (pointsAreScreenAbsolute) "screen" else "view"}")
         add("limit $limitRect, ${excludeRects.size} exclude, reopens $reopenCount")
+        add("release when pen away: ${if (releaseWhenPenAway) "on" else "off"}, pen ${if (penNear) "near" else "away"}, wakes $wakeCount")
         if (lastListDelayMs >= 0) add("pen-up to point list: $lastListDelayMs ms")
         lastError?.let { add("error: $it") }
     }
@@ -222,6 +273,8 @@ class OnyxInkBackend : InkBackend {
         h.setBrushRawDrawingEnabled(true)
         // [V per docs] Without this no callbacks fire.
         h.setRawDrawingEnabled(isActive())
+        appliedActive = isActive()
+        if (appliedActive == false) h.setRawDrawingRenderEnabled(false)
     }
 
     private fun reopen() {
@@ -229,6 +282,7 @@ class OnyxInkBackend : InkBackend {
         try {
             h.setRawDrawingEnabled(false)
             h.closeRawDrawing()
+            appliedActive = null
             configureAndOpen(h)
             reopenCount++
         } catch (t: Throwable) {
@@ -236,12 +290,25 @@ class OnyxInkBackend : InkBackend {
         }
     }
 
-    private fun isActive() = wantEnabled && !paused
+    private fun isActive() = wantEnabled && !paused && (penNear || !releaseWhenPenAway)
+
+    private var appliedActive: Boolean? = null
 
     private fun applyEnabled() {
         val h = helper ?: return
-        runCatching { h.setRawDrawingEnabled(isActive()) }
-            .onFailure { lastError = "enable: ${it.javaClass.simpleName}" }
+        val active = isActive()
+        if (active == appliedActive) return
+        runCatching {
+            if (active) {
+                h.setRawDrawingRenderEnabled(true)
+                h.setRawDrawingEnabled(true)
+            } else {
+                h.setRawDrawingEnabled(false)
+                // [I per docs] Turning render off is what hands gesture routing back to the system.
+                h.setRawDrawingRenderEnabled(false)
+            }
+            appliedActive = active
+        }.onFailure { lastError = "enable: ${it.javaClass.simpleName}" }
     }
 
     private fun applyEpdMode(v: View) {
@@ -261,7 +328,15 @@ class OnyxInkBackend : InkBackend {
     private val callback = object : RawInputCallback() {
         override fun onBeginRawDrawing(b: Boolean, p: TouchPoint) {
             val rp = toRaw(p)
-            main.post { listener?.onStrokeBegin(rp) }
+            main.post {
+                strokeInProgress = true
+                onPenActivity()
+                listener?.onStrokeBegin(rp)
+            }
+        }
+
+        override fun onPenActive(p: TouchPoint) {
+            main.post { onPenActivity() }
         }
 
         override fun onRawDrawingTouchPointMoveReceived(p: TouchPoint) {
@@ -280,12 +355,19 @@ class OnyxInkBackend : InkBackend {
             val up = if (penUpAt > 0) penUpAt else SystemClock.uptimeMillis()
             val delay = SystemClock.uptimeMillis() - up
             main.post {
+                strokeInProgress = false
+                onPenActivity()
                 lastListDelayMs = delay
                 listener?.onStrokeEnd(pts, up)
             }
         }
 
-        override fun onBeginRawErasing(b: Boolean, p: TouchPoint) {}
+        override fun onBeginRawErasing(b: Boolean, p: TouchPoint) {
+            main.post {
+                strokeInProgress = true
+                onPenActivity()
+            }
+        }
 
         override fun onRawErasingTouchPointMoveReceived(p: TouchPoint) {}
 
@@ -295,7 +377,11 @@ class OnyxInkBackend : InkBackend {
             val pts = list.points.map { toRaw(it) }
             if (pts.isEmpty()) return
             val up = SystemClock.uptimeMillis()
-            main.post { listener?.onEraseEnd(pts, up) }
+            main.post {
+                strokeInProgress = false
+                onPenActivity()
+                listener?.onEraseEnd(pts, up)
+            }
         }
     }
 
@@ -311,5 +397,10 @@ class OnyxInkBackend : InkBackend {
         // [V] TouchPoint.timestamp exists. [G] Its clock base is unconfirmed, so it is only used
         // for spacing within a stroke, never compared with uptime.
         return RawPoint(x, y, pressure.coerceIn(0f, 1f), p.timestamp)
+    }
+
+    private companion object {
+        /** Release the SDK this long after the last pen activity. */
+        const val PEN_IDLE_MS = 1500L
     }
 }

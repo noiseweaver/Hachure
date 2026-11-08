@@ -20,6 +20,7 @@ class MainActivity : Activity() {
     private lateinit var debugOverlay: TextView
     private lateinit var btnLiveStyle: Button
     private lateinit var btnCoords: Button
+    private lateinit var btnRelease: Button
     private var lastStats: String? = null
 
     private val layoutListener = ViewTreeObserver.OnGlobalLayoutListener { pushExcludeRects() }
@@ -32,12 +33,14 @@ class MainActivity : Activity() {
         debugOverlay = findViewById(R.id.debug_overlay)
         btnLiveStyle = findViewById(R.id.btn_live_style)
         btnCoords = findViewById(R.id.btn_coords)
+        btnRelease = findViewById(R.id.btn_release)
 
         findViewById<Button>(R.id.btn_clear).setOnClickListener { canvas.clearPage() }
         findViewById<Button>(R.id.btn_clean).setOnClickListener { canvas.cleanScreen() }
         findViewById<Button>(R.id.btn_debug).setOnClickListener { toggleDebug() }
         btnLiveStyle.setOnClickListener { pickLiveStyle() }
         btnCoords.setOnClickListener { toggleCoords() }
+        btnRelease.setOnClickListener { toggleRelease() }
 
         canvas.statsListener = CanvasView.StatsListener { points, penUpMs, renderMs ->
             lastStats = getString(R.string.debug_last_stroke, points, penUpMs, renderMs)
@@ -75,7 +78,9 @@ class MainActivity : Activity() {
     private fun toggleDebug() {
         val show = !debugVisible()
         debugOverlay.visibility = if (show) View.VISIBLE else View.GONE
-        btnCoords.visibility = if (show && onyx() != null) View.VISIBLE else View.GONE
+        val onyxDebug = if (show && onyx() != null) View.VISIBLE else View.GONE
+        btnCoords.visibility = onyxDebug
+        btnRelease.visibility = onyxDebug
         if (show) renderDebug()
     }
 
@@ -101,6 +106,12 @@ class MainActivity : Activity() {
         if (o != null) btnLiveStyle.text = getString(R.string.live_style, o.liveStyle.label)
     }
 
+    private fun toggleRelease() {
+        val o = onyx() ?: return
+        o.releaseWhenPenAway = !o.releaseWhenPenAway
+        renderDebug()
+    }
+
     private fun toggleCoords() {
         val o = onyx() ?: return
         o.pointsAreScreenAbsolute = !o.pointsAreScreenAbsolute
@@ -109,6 +120,7 @@ class MainActivity : Activity() {
 
     private fun renderDebug() {
         onyx()?.let {
+            btnRelease.text = getString(if (it.releaseWhenPenAway) R.string.release_on else R.string.release_off)
             btnCoords.text = getString(if (it.pointsAreScreenAbsolute) R.string.coords_screen else R.string.coords_view)
         }
         debugOverlay.text = buildString {

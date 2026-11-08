@@ -129,6 +129,11 @@ class CanvasView @JvmOverloads constructor(
     override fun onTouchEvent(event: MotionEvent): Boolean =
         backend.onTouchEvent(event) || super.onTouchEvent(event)
 
+    override fun onHoverEvent(event: MotionEvent): Boolean {
+        backend.onHoverEvent(event)
+        return super.onHoverEvent(event)
+    }
+
     fun cleanScreen() = backend.cleanScreen(this)
 
     fun clearPage() {

@@ -64,6 +64,9 @@ interface InkBackend {
     /** Forwarded from the view. Returns true when the backend consumed the event. */
     fun onTouchEvent(event: MotionEvent): Boolean
 
+    /** Hover events forwarded from the view (stylus proximity). */
+    fun onHoverEvent(event: MotionEvent) {}
+
     fun pause()
 
     fun resume()
