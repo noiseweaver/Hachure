@@ -235,6 +235,7 @@ class OnyxInkBackend : InkBackend {
         add("A2 live: ${liveTool.id}${if (liveInk) "" else " (ink off)"} ${String.format(Locale.US, "%.1f", liveWidthPx)}px, coords ${if (pointsAreScreenAbsolute) "screen" else "view"}")
         add("limit $limitRect, ${excludeRects.size} exclude, reopens $reopenCount")
         add("release when pen away: ${if (releaseWhenPenAway) "on" else "off"}, pen ${if (penNear) "near" else "away"}, wakes $wakeCount")
+        add("commit from: $lastCommitSource")
         if (lastListDelayMs >= 0) add("pen-up to point list: $lastListDelayMs ms")
         lastError?.let { add("error: $it") }
     }
@@ -347,6 +348,10 @@ class OnyxInkBackend : InkBackend {
     private val callback = object : RawInputCallback() {
         override fun onBeginRawDrawing(b: Boolean, p: TouchPoint) {
             val rp = toRaw(p)
+            strokeSeq++
+            penUpAt = 0L
+            moveBuffer.clear()
+            moveBuffer += rp
             main.post {
                 strokeInProgress = true
                 onPenActivity()
@@ -362,46 +367,91 @@ class OnyxInkBackend : InkBackend {
             // Points arrive again in full in the list callback. While the SDK inks live they are
             // ignored: each app invalidate would cost a 100 to 300 ms e-ink refresh. The line
             // preview takes them, throttled to one per MOVE_THROTTLE_MS.
+            moveBuffer += toRaw(p)
             if (!wantMoves || liveInk) return
             val now = SystemClock.uptimeMillis()
             if (now - lastMoveSent < MOVE_THROTTLE_MS) return
             lastMoveSent = now
-            val rp = toRaw(p)
+            val rp = moveBuffer.last()
             main.post { listener?.onStrokeMove(listOf(rp)) }
         }
 
         override fun onEndRawDrawing(b: Boolean, p: TouchPoint) {
-            // [I per docs] Fires before the list callback.
-            penUpAt = SystemClock.uptimeMillis()
+            // [V on device 2026-11-09] Fires at pen-up, but the point list can arrive seconds
+            // later (3.4 s seen on the Note Air 2). So the stroke is committed here from the
+            // move samples, and the list is only a fallback when moves did not arrive.
+            val up = SystemClock.uptimeMillis()
+            penUpAt = up
+            moveBuffer += toRaw(p)
+            val pts = ArrayList(moveBuffer)
+            val seq = strokeSeq
+            // [G] Move callbacks carry every sample. If they did not arrive (2 points for a long
+            // stroke), wait for the list instead of committing a straight segment.
+            val usable = pts.size >= 3 || isDot(pts)
+            if (usable) committedSeq = seq
+            main.post {
+                strokeInProgress = false
+                onPenActivity()
+                if (usable) {
+                    lastCommitSource = "moves (${pts.size} pts)"
+                    listener?.onStrokeEnd(pts, up)
+                }
+            }
         }
 
         override fun onRawDrawingTouchPointListReceived(list: TouchPointList) {
+            val now = SystemClock.uptimeMillis()
+            val up = if (penUpAt > 0) penUpAt else now
+            val delay = now - up
+            val seq = strokeSeq
+            if (committedSeq == seq) {
+                main.post { lastListDelayMs = delay }
+                return
+            }
             val pts = list.points.map { toRaw(it) }
             if (pts.isEmpty()) return
-            val up = if (penUpAt > 0) penUpAt else SystemClock.uptimeMillis()
-            val delay = SystemClock.uptimeMillis() - up
+            committedSeq = seq
             main.post {
                 strokeInProgress = false
                 onPenActivity()
                 lastListDelayMs = delay
+                lastCommitSource = "point list (${pts.size} pts)"
                 listener?.onStrokeEnd(pts, up)
             }
         }
 
         override fun onBeginRawErasing(b: Boolean, p: TouchPoint) {
+            strokeSeq++
+            moveBuffer.clear()
+            moveBuffer += toRaw(p)
             main.post {
                 strokeInProgress = true
                 onPenActivity()
             }
         }
 
-        override fun onRawErasingTouchPointMoveReceived(p: TouchPoint) {}
+        override fun onRawErasingTouchPointMoveReceived(p: TouchPoint) {
+            moveBuffer += toRaw(p)
+        }
 
-        override fun onEndRawErasing(b: Boolean, p: TouchPoint) {}
+        // Same late-list issue as drawing: erase at pen-up from the move samples.
+        override fun onEndRawErasing(b: Boolean, p: TouchPoint) {
+            moveBuffer += toRaw(p)
+            val pts = ArrayList(moveBuffer)
+            val up = SystemClock.uptimeMillis()
+            committedSeq = strokeSeq
+            main.post {
+                strokeInProgress = false
+                onPenActivity()
+                listener?.onEraseEnd(pts, up)
+            }
+        }
 
         override fun onRawErasingTouchPointListReceived(list: TouchPointList) {
+            if (committedSeq == strokeSeq) return
             val pts = list.points.map { toRaw(it) }
             if (pts.isEmpty()) return
+            committedSeq = strokeSeq
             val up = SystemClock.uptimeMillis()
             main.post {
                 strokeInProgress = false
@@ -426,6 +476,19 @@ class OnyxInkBackend : InkBackend {
     }
 
     @Volatile private var lastMoveSent = 0L
+
+    // Reader thread only ([I] all RawInputCallback methods run on one SDK thread).
+    private val moveBuffer = ArrayList<RawPoint>(512)
+    @Volatile private var strokeSeq = 0
+    @Volatile private var committedSeq = -1
+    private var lastCommitSource = "none"
+
+    /** A tap: begin and end within half a millimetre or so. */
+    private fun isDot(pts: List<RawPoint>): Boolean {
+        val a = pts.first()
+        val b = pts.last()
+        return kotlin.math.hypot(a.x - b.x, a.y - b.y) < 6f
+    }
 
     private companion object {
         /** Line preview refresh interval. [G] fast enough to feel live in A2, slow enough to keep up. */
