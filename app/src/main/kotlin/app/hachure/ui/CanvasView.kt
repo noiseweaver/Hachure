@@ -254,8 +254,63 @@ class CanvasView @JvmOverloads constructor(
         }
     }
 
-    override fun onTouchEvent(event: MotionEvent): Boolean =
-        backend.onTouchEvent(event) || super.onTouchEvent(event)
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER) liveErase(event)
+        return backend.onTouchEvent(event) || super.onTouchEvent(event)
+    }
+
+    // Live erasing with the stylus eraser end. The SDK's erase callbacks can arrive seconds
+    // late on the Note Air 2, but Android still delivers TOOL_TYPE_ERASER MotionEvents to the
+    // view ([G] confirmed only through this build's debug line). Strokes go as the eraser
+    // touches them, in batches every ERASE_FRAME_MS, and one rub is one undo step. The SDK path
+    // still runs afterwards and finds nothing left to erase.
+
+    private val eraseBatch = ArrayList<RawPoint>()
+    private var lastEraseFlush = 0L
+    private var eraseEvents = 0
+    private var eraseUpAt = 0L
+    private var eraseStatus = "eraser: no use yet"
+
+    private fun liveErase(e: MotionEvent) {
+        val h = history ?: return
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                h.beginGroup()
+                eraseUpAt = 0L
+                eraseBatch.clear()
+                eraseEvents = 0
+                lastEraseFlush = 0L
+            }
+        }
+        for (i in 0 until e.historySize) {
+            eraseBatch += RawPoint(e.getHistoricalX(i), e.getHistoricalY(i), 1f, e.getHistoricalEventTime(i))
+        }
+        eraseBatch += RawPoint(e.x, e.y, 1f, e.eventTime)
+        eraseEvents++
+        val now = SystemClock.uptimeMillis()
+        val ending = e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL
+        if (ending || now - lastEraseFlush >= ERASE_FRAME_MS) {
+            lastEraseFlush = now
+            val last = eraseBatch.last()
+            eraseLive(ArrayList(eraseBatch))
+            eraseBatch.clear()
+            eraseBatch += last
+        }
+        if (ending) {
+            h.endGroup()
+            eraseUpAt = now
+            eraseStatus = "eraser: live, $eraseEvents events"
+        }
+    }
+
+    private fun eraseLive(points: List<RawPoint>) {
+        val pg = page ?: return
+        val h = history ?: return
+        val path = points.map { toPage(it, points.first().timeMs) }
+        applyChange(h.erase(Hit.strokesTouched(pg.strokes, path, ERASER_END_RADIUS_MM)))
+    }
+
+    fun eraseDebug(): String = eraseStatus
 
     override fun onHoverEvent(event: MotionEvent): Boolean {
         backend.onHoverEvent(event)
@@ -322,6 +377,11 @@ class CanvasView @JvmOverloads constructor(
     }
 
     override fun onEraseEnd(points: List<RawPoint>, penUpUptime: Long) {
+        if (eraseUpAt > 0) {
+            eraseStatus += ", SDK erase +${SystemClock.uptimeMillis() - eraseUpAt} ms after"
+        } else {
+            eraseStatus = "eraser: SDK only (no MotionEvents)"
+        }
         erase(points, ERASER_END_RADIUS_MM)
         endLive()
     }
@@ -423,5 +483,8 @@ class CanvasView @JvmOverloads constructor(
 
         /** Eraser end of the stylus: broader, like rubbing out. */
         const val ERASER_END_RADIUS_MM = 2.5f
+
+        /** Live erase batch interval: each batch is one partial refresh. */
+        const val ERASE_FRAME_MS = 80L
     }
 }
