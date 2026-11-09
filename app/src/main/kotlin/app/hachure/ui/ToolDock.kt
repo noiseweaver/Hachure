@@ -3,6 +3,7 @@ package app.hachure.ui
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Rect
 import android.util.AttributeSet
@@ -289,12 +290,112 @@ class ToolDock @JvmOverloads constructor(
         return e.rawY - loc[1]
     }
 
+    // Drag ghost: a dashed outline of where the dock will land, drawn over everything while a
+    // finger drags the grip or the puck. Redrawn at most every GHOST_FRAME_MS, invalidating only
+    // the old and new outline, so each step is one small partial refresh.
+
+    private enum class GhostKind { NONE, PUCK, RAIL_LEFT, RAIL_RIGHT }
+
+    private var ghostKind = GhostKind.NONE
+    private var ghostX = 0f
+    private var ghostY = 0f
+    private var lastGhostAt = 0L
+    private val ghostPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.BLACK
+        style = Paint.Style.STROKE
+        strokeWidth = RULE_PX
+    }
+    private val ghostDash by lazy { DashPathEffect(floatArrayOf(mm(2f).toFloat(), mm(1.2f).toFloat()), 0f) }
+    private val ghostRect = Rect()
+
+    init {
+        setWillNotDraw(false)
+    }
+
+    private fun ghostBounds(out: Rect) {
+        val pad = RULE_PX.toInt() + 2
+        when (ghostKind) {
+            GhostKind.NONE -> out.setEmpty()
+            GhostKind.PUCK -> {
+                val r = mm(PUCK_MM) / 2
+                out.set(ghostX.toInt() - r - pad, ghostY.toInt() - r - pad, ghostX.toInt() + r + pad, ghostY.toInt() + r + pad)
+            }
+            GhostKind.RAIL_LEFT -> out.set(0, 0, railWidth() + pad, height)
+            GhostKind.RAIL_RIGHT -> out.set(width - railWidth() - pad, 0, width, height)
+        }
+    }
+
+    private fun showGhost(e: MotionEvent, force: Boolean = false) {
+        val now = android.os.SystemClock.uptimeMillis()
+        if (!force && now - lastGhostAt < GHOST_FRAME_MS) return
+        lastGhostAt = now
+        val x = localX(e)
+        val kind = when (dockFor(x)) {
+            Dock.LEFT -> GhostKind.RAIL_LEFT
+            Dock.RIGHT -> GhostKind.RAIL_RIGHT
+            Dock.FLOATING -> GhostKind.PUCK
+        }
+        val old = Rect()
+        ghostBounds(old)
+        ghostKind = kind
+        ghostX = x
+        ghostY = localY(e)
+        ghostBounds(ghostRect)
+        if (ghostKind != GhostKind.NONE && old.isEmpty) fastRefresh(true)
+        old.union(ghostRect)
+        invalidate(old)
+    }
+
+    private fun hideGhost() {
+        if (ghostKind == GhostKind.NONE) return
+        ghostBounds(ghostRect)
+        ghostKind = GhostKind.NONE
+        invalidate(ghostRect)
+        fastRefresh(false)
+    }
+
+    /**
+     * [V] EpdController.setViewDefaultUpdateMode / resetViewUpdateMode exist in onyxsdk-device
+     * 1.2.31. [I] DU makes the moving outline refresh quickly in black and white. No-op off Boox.
+     */
+    private fun fastRefresh(on: Boolean) {
+        if (!app.hachure.ink.InkBackends.isOnyxDevice()) return
+        runCatching {
+            if (on) {
+                com.onyx.android.sdk.api.device.epd.EpdController.setViewDefaultUpdateMode(
+                    this, com.onyx.android.sdk.api.device.epd.UpdateMode.DU,
+                )
+            } else {
+                com.onyx.android.sdk.api.device.epd.EpdController.resetViewUpdateMode(this)
+            }
+        }
+    }
+
+    override fun dispatchDraw(canvas: Canvas) {
+        super.dispatchDraw(canvas)
+        if (ghostKind == GhostKind.NONE) return
+        ghostPaint.pathEffect = ghostDash
+        val half = RULE_PX / 2
+        when (ghostKind) {
+            GhostKind.PUCK -> canvas.drawCircle(ghostX, ghostY, mm(PUCK_MM) / 2f - half, ghostPaint)
+            GhostKind.RAIL_LEFT -> canvas.drawRect(half, half, railWidth() - half, height - half, ghostPaint)
+            GhostKind.RAIL_RIGHT -> canvas.drawRect(width - railWidth() + half, half, width - half, height - half, ghostPaint)
+            GhostKind.NONE -> {}
+        }
+        ghostPaint.pathEffect = null
+    }
+
     private inner class GripDrag : OnTouchListener {
         override fun onTouch(v: View, e: MotionEvent): Boolean {
-            if (e.actionMasked == MotionEvent.ACTION_UP) {
-                val x = localX(e)
-                val target = dockFor(x)
-                if (target != dock) moveTo(target, x, localY(e))
+            when (e.actionMasked) {
+                MotionEvent.ACTION_MOVE -> showGhost(e)
+                MotionEvent.ACTION_UP -> {
+                    hideGhost()
+                    val x = localX(e)
+                    val target = dockFor(x)
+                    if (target != dock) moveTo(target, x, localY(e))
+                }
+                MotionEvent.ACTION_CANCEL -> hideGhost()
             }
             return true
         }
@@ -303,22 +404,34 @@ class ToolDock @JvmOverloads constructor(
     private inner class PuckDrag : OnTouchListener {
         private var downX = 0f
         private var downY = 0f
+        private var dragging = false
 
         override fun onTouch(v: View, e: MotionEvent): Boolean {
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     downX = e.rawX
                     downY = e.rawY
+                    dragging = false
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (!dragging && hypot(e.rawX - downX, e.rawY - downY) >= mm(TAP_SLOP_MM)) {
+                        dragging = true
+                        if (ringOpen) setRingOpen(false)
+                        showGhost(e, force = true)
+                    } else if (dragging) {
+                        showGhost(e)
+                    }
                 }
                 MotionEvent.ACTION_UP -> {
-                    val moved = hypot(e.rawX - downX, e.rawY - downY)
-                    if (moved < mm(TAP_SLOP_MM)) {
+                    hideGhost()
+                    if (!dragging) {
                         setRingOpen(!ringOpen)
                     } else {
                         val x = localX(e)
                         moveTo(dockFor(x), x, localY(e))
                     }
                 }
+                MotionEvent.ACTION_CANCEL -> hideGhost()
             }
             return true
         }
@@ -356,6 +469,7 @@ class ToolDock @JvmOverloads constructor(
         const val TAP_SLOP_MM = 3f
         const val RULE_PX = 4f
         const val GRIP_GLYPH = "≡"
+        const val GHOST_FRAME_MS = 50L
 
         /** Visual bar thickness for fine, medium, bold. */
         val WIDTH_BAR_MM = floatArrayOf(0.35f, 0.8f, 1.5f)
