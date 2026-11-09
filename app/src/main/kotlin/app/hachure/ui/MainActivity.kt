@@ -205,6 +205,7 @@ class MainActivity : Activity() {
                     "v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
             )
             canvas.backend.debugInfo().forEach { appendLine(it) }
+            appendLine(canvas.eraseDebug())
             canvas.rendererError()?.let { appendLine("render fallback: $it") }
             append(lastStats ?: getString(R.string.debug_no_strokes))
         }

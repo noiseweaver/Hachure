@@ -59,4 +59,34 @@ class HistoryTest {
         assertFalse(h.canUndo)
         assertEquals(listOf(1L), ids(p))
     }
+
+    @Test fun groupedErasesUndoAsOneStepInOrder() {
+        val p = Page(100f, 100f); val h = History(p)
+        (1L..5L).forEach { h.add(stroke(it)) }
+        h.beginGroup()
+        h.erase(setOf(2L))
+        h.erase(setOf(4L))
+        h.erase(setOf(1L))
+        h.endGroup()
+        assertEquals(listOf(3L, 5L), ids(p))
+        assertEquals(3, h.undo().size)
+        assertEquals(listOf(1L, 2L, 3L, 4L, 5L), ids(p))
+        h.redo()
+        assertEquals(listOf(3L, 5L), ids(p))
+        h.undo()
+        h.undo()
+        assertEquals(listOf(1L, 2L, 3L, 4L), ids(p))
+    }
+
+    @Test fun addInsideGroupStartsNewStep() {
+        val p = Page(100f, 100f); val h = History(p)
+        (1L..3L).forEach { h.add(stroke(it)) }
+        h.beginGroup()
+        h.erase(setOf(1L))
+        h.add(stroke(9))
+        h.erase(setOf(2L))
+        h.endGroup()
+        h.undo()
+        assertEquals(setOf(2L, 3L, 9L), ids(p).toSet())
+    }
 }
