@@ -193,8 +193,9 @@ class OnyxInkBackend : InkBackend {
     /**
      * [V on device 2026-11-10] The expanded naviball does not take window focus, so focus loss
      * alone did not free it. The activity listens for the Boox system UI broadcasts instead and
-     * reports them here. As a way out if a "closed" broadcast is missed, a pen stroke on the
-     * canvas itself (delivered as MotionEvents while released) clears the block on pen-up.
+     * reports them here. [V on device 2026-11-10] Enabling raw drawing while the naviball menu
+     * is open leaves the menu dead until it is collapsed and expanded again, so there is no
+     * inking at all while it is open; the pen wake-up must not override this.
      */
     private var systemUiOpen: String? = null
     private var systemUiBlocks = 0
@@ -223,7 +224,6 @@ class OnyxInkBackend : InkBackend {
         val tool = event.getToolType(0)
         val isPen = tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER
         if (isPen) onPenActivity()
-        if (isPen && systemUiOpen != null && event.actionMasked == MotionEvent.ACTION_UP) setSystemUiOpen(null)
         return isPen
     }
 
