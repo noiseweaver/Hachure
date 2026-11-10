@@ -9,7 +9,7 @@ class StrokeTest {
 
     @Test fun boundsArePaddedByHalfWidth() {
         val s = Stroke(
-            id = 1, tool = Tool.PEN, widthMm = 0.4f,
+            id = 1, tool = Tool.PENCIL, widthMm = 0.4f,
             points = listOf(InkPoint(1f, 2f, 0.5f, 0), InkPoint(5f, -1f, 0.5f, 10)),
         )
         val b = s.bounds()
@@ -21,7 +21,7 @@ class StrokeTest {
 
     @Test fun rejectsEmptyStroke() {
         assertThrows(IllegalArgumentException::class.java) {
-            Stroke(1, Tool.PEN, 0.4f, emptyList())
+            Stroke(1, Tool.PENCIL, 0.4f, emptyList())
         }
     }
 

@@ -14,6 +14,7 @@ import com.onyx.android.sdk.data.note.TouchPoint
 import com.onyx.android.sdk.pen.RawInputCallback
 import com.onyx.android.sdk.pen.TouchHelper
 import com.onyx.android.sdk.pen.data.TouchPointList
+import app.hachure.model.Tool
 import java.util.Locale
 
 /**
@@ -31,25 +32,36 @@ class OnyxInkBackend : InkBackend {
     override val rendersLiveStroke = true
 
     /**
-     * Every live A2 stroke style the SDK offers ([V] constants 0..6 in 1.4.12). All are drawing
-     * options. Neo brush and charcoal v2 are disabled by default in the notable app over crash
-     * reports [I], so they are labelled experimental.
+     * Live A2 stroke style for the current brush ([V] STROKE_STYLE_* constants 0..6 in 1.4.12).
+     * Neo brush and charcoal v2 are disabled by default in the notable app over crash reports
+     * [I], so the UI labels them experimental.
      */
-    enum class LiveStyle(val label: String, val sdkValue: Int) {
-        PENCIL("pencil", TouchHelper.STROKE_STYLE_PENCIL),
-        FOUNTAIN("fountain", TouchHelper.STROKE_STYLE_FOUNTAIN),
-        MARKER("marker", TouchHelper.STROKE_STYLE_MARKER),
-        NEO_BRUSH("brush (exp)", TouchHelper.STROKE_STYLE_NEO_BRUSH),
-        CHARCOAL("charcoal", TouchHelper.STROKE_STYLE_CHARCOAL),
-        DASH("dash", TouchHelper.STROKE_STYLE_DASH),
-        CHARCOAL_V2("charcoal 2 (exp)", TouchHelper.STROKE_STYLE_CHARCOAL_V2),
-    }
-
-    var liveStyle = LiveStyle.PENCIL
+    var liveTool = Tool.PENCIL
         set(value) {
             field = value
-            helper?.setStrokeStyle(value.sdkValue)
+            helper?.setStrokeStyle(sdkStyle(value))
         }
+
+    /**
+     * False while the line or eraser tool is active: the SDK still reports points but must not
+     * ink them. [I per docs] setRawDrawingRenderEnabled(false) keeps callbacks flowing.
+     * [G] that move callbacks keep arriving with render off (needed for the line preview).
+     */
+    var liveInk = true
+        set(value) {
+            if (field == value) return
+            field = value
+            appliedActive = null
+            applyEnabled()
+        }
+
+    /** Wants move samples (line preview). Only sent while [liveInk] is off, throttled. */
+    var wantMoves = false
+
+    /** [V] EpdController.getMaxTouchPressure() exists. [I] about 4095 on Wacom EMR panels. */
+    val maxTouchPressure: Float by lazy {
+        runCatching { EpdController.getMaxTouchPressure() }.getOrNull()?.takeIf { it > 1f } ?: 4095f
+    }
 
     /** Live A2 stroke width in px. */
     var liveWidthPx = 3f
@@ -149,6 +161,52 @@ class OnyxInkBackend : InkBackend {
         applyEnabled()
     }
 
+    /**
+     * [V on device 2026-11-10] With raw drawing enabled the expanded naviball got no touches.
+     * [G] Opening the naviball menu takes window focus from the activity, so releasing on focus
+     * loss frees it. The debug overlay shows the focus state to confirm.
+     */
+    private var windowFocused = true
+    private var focusLosses = 0
+
+    override fun setWindowFocused(focused: Boolean) {
+        if (windowFocused == focused) return
+        windowFocused = focused
+        if (!focused) focusLosses++
+        applyEnabled()
+    }
+
+    /**
+     * [V] TouchHelper.setEraserRawDrawingEnabled exists in 1.4.12 and forwards to the device's
+     * EPD controller, next to setBrushRawDrawingEnabled. [I] It makes the system ink the eraser
+     * end's path live, like the pen tip. [G] Erase callbacks still fire with it on. Switchable
+     * from More in case either guess is wrong on the Note Air 2.
+     */
+    private var eraserTrail = true
+
+    override fun setEraserTrail(on: Boolean) {
+        if (eraserTrail == on) return
+        eraserTrail = on
+        helper?.let { h -> runCatching { h.setEraserRawDrawingEnabled(on) }.onFailure { lastError = "trail: ${it.javaClass.simpleName}" } }
+    }
+
+    /**
+     * [V on device 2026-11-10] The expanded naviball does not take window focus, so focus loss
+     * alone did not free it. The activity listens for the Boox system UI broadcasts instead and
+     * reports them here. [V on device 2026-11-10] Enabling raw drawing while the naviball menu
+     * is open leaves the menu dead until it is collapsed and expanded again, so there is no
+     * inking at all while it is open; the pen wake-up must not override this.
+     */
+    private var systemUiOpen: String? = null
+    private var systemUiBlocks = 0
+
+    override fun setSystemUiOpen(reason: String?) {
+        if (systemUiOpen == reason) return
+        if (reason != null && systemUiOpen == null) systemUiBlocks++
+        systemUiOpen = reason
+        applyEnabled()
+    }
+
     override fun pause() {
         paused = true
         applyEnabled()
@@ -196,6 +254,37 @@ class OnyxInkBackend : InkBackend {
         applyEnabled()
     }
 
+    // While raw drawing is enabled the SDK holds the panel inside the limit rect: view
+    // invalidates are not shown until it lets go. [V on device 2026-11-10] erased strokes stayed
+    // on screen until the 1.5 s idle release, or for good while the pen stayed near. New ink
+    // hides this (the commit matches the live ink), removed ink does not. So after such a repaint
+    // raw drawing is switched off for one refresh, the pattern the Onyx demos use around redraws.
+    // [G] REPAINT_HOLD_MS is long enough for the partial refresh to start.
+
+    private var repaintPending = false
+    private var repaintHold = false
+    private var repaintCount = 0
+    private val repaintDone = Runnable {
+        repaintHold = false
+        applyEnabled()
+    }
+
+    override fun showRepaint() {
+        repaintPending = true
+        // Toggling mid-gesture would cut the stroke or rub short; the end callbacks flush.
+        if (!strokeInProgress) flushRepaint()
+    }
+
+    private fun flushRepaint() {
+        if (!repaintPending) return
+        repaintPending = false
+        main.removeCallbacks(repaintDone)
+        repaintHold = true
+        repaintCount++
+        applyEnabled()
+        main.postDelayed(repaintDone, REPAINT_HOLD_MS)
+    }
+
     override fun cleanScreen(target: View) {
         // [I] A full GC refresh while the SDK holds A2 can be ignored or fight the raw layer, so
         // inking is paused around it. [V] EpdController.invalidate(View, UpdateMode) exists.
@@ -212,10 +301,21 @@ class OnyxInkBackend : InkBackend {
         target.postDelayed({ applyEnabled() }, 300)
     }
 
+    override fun setBrush(tool: Tool, widthPx: Float, liveInk: Boolean, wantMoves: Boolean) {
+        liveTool = tool
+        liveWidthPx = widthPx
+        this.wantMoves = wantMoves
+        this.liveInk = liveInk
+    }
+
     override fun debugInfo(): List<String> = buildList {
-        add("A2 live: ${liveStyle.label} ${String.format(Locale.US, "%.1f", liveWidthPx)}px, coords ${if (pointsAreScreenAbsolute) "screen" else "view"}")
+        add("A2 live: ${liveTool.id}${if (liveInk) "" else " (ink off)"} ${String.format(Locale.US, "%.1f", liveWidthPx)}px, coords ${if (pointsAreScreenAbsolute) "screen" else "view"}")
         add("limit $limitRect, ${excludeRects.size} exclude, reopens $reopenCount")
         add("release when pen away: ${if (releaseWhenPenAway) "on" else "off"}, pen ${if (penNear) "near" else "away"}, wakes $wakeCount")
+        add("commit from: $lastCommitSource, repaints $repaintCount")
+        add("eraser trail ${if (eraserTrail) "on" else "off"}")
+        add("system ui: ${systemUiOpen ?: "none"}, blocks $systemUiBlocks")
+        add("window ${if (windowFocused) "focused" else "not focused"}, focus losses $focusLosses")
         if (lastListDelayMs >= 0) add("pen-up to point list: $lastListDelayMs ms")
         lastError?.let { add("error: $it") }
     }
@@ -262,15 +362,16 @@ class OnyxInkBackend : InkBackend {
 
     private fun configureAndOpen(h: TouchHelper) {
         h.setStrokeWidth(liveWidthPx)
-        h.setStrokeStyle(liveStyle.sdkValue)
+        h.setStrokeStyle(sdkStyle(liveTool))
         h.setStrokeColor(Color.BLACK)
         h.setLimitRect(mutableListOf(Rect(limitRect)), excludeRects.map { Rect(it) }.toMutableList())
         h.openRawDrawing()
-        h.setRawDrawingRenderEnabled(true)
+        h.setRawDrawingRenderEnabled(liveInk)
         // [V] No SDK refresh at pen-up: the app's single commit invalidate replaces it.
         h.setPenUpRefreshEnabled(false)
         // [I] Default true per docs; set explicitly so a stylus button press does not erase.
         h.setBrushRawDrawingEnabled(true)
+        runCatching { h.setEraserRawDrawingEnabled(eraserTrail) }
         // [V per docs] Without this no callbacks fire.
         h.setRawDrawingEnabled(isActive())
         appliedActive = isActive()
@@ -290,7 +391,8 @@ class OnyxInkBackend : InkBackend {
         }
     }
 
-    private fun isActive() = wantEnabled && !paused && (penNear || !releaseWhenPenAway)
+    private fun isActive() =
+        wantEnabled && !paused && windowFocused && systemUiOpen == null && !repaintHold && (penNear || !releaseWhenPenAway)
 
     private var appliedActive: Boolean? = null
 
@@ -300,7 +402,7 @@ class OnyxInkBackend : InkBackend {
         if (active == appliedActive) return
         runCatching {
             if (active) {
-                h.setRawDrawingRenderEnabled(true)
+                h.setRawDrawingRenderEnabled(liveInk)
                 h.setRawDrawingEnabled(true)
             } else {
                 h.setRawDrawingEnabled(false)
@@ -328,6 +430,10 @@ class OnyxInkBackend : InkBackend {
     private val callback = object : RawInputCallback() {
         override fun onBeginRawDrawing(b: Boolean, p: TouchPoint) {
             val rp = toRaw(p)
+            strokeSeq++
+            penUpAt = 0L
+            moveBuffer.clear()
+            moveBuffer += rp
             main.post {
                 strokeInProgress = true
                 onPenActivity()
@@ -340,47 +446,103 @@ class OnyxInkBackend : InkBackend {
         }
 
         override fun onRawDrawingTouchPointMoveReceived(p: TouchPoint) {
-            // Points arrive again in full in the list callback. No invalidate here: each one
-            // would cost a 100 to 300 ms e-ink refresh.
+            // Points arrive again in full in the list callback. While the SDK inks live they are
+            // ignored: each app invalidate would cost a 100 to 300 ms e-ink refresh. The line
+            // preview takes them, throttled to one per MOVE_THROTTLE_MS.
+            moveBuffer += toRaw(p)
+            if (!wantMoves || liveInk) return
+            val now = SystemClock.uptimeMillis()
+            if (now - lastMoveSent < MOVE_THROTTLE_MS) return
+            lastMoveSent = now
+            val rp = moveBuffer.last()
+            main.post { listener?.onStrokeMove(listOf(rp)) }
         }
 
         override fun onEndRawDrawing(b: Boolean, p: TouchPoint) {
-            // [I per docs] Fires before the list callback.
-            penUpAt = SystemClock.uptimeMillis()
+            // [V on device 2026-11-09] Fires at pen-up, but the point list can arrive seconds
+            // later (3.4 s seen on the Note Air 2). So the stroke is committed here from the
+            // move samples, and the list is only a fallback when moves did not arrive.
+            val up = SystemClock.uptimeMillis()
+            penUpAt = up
+            moveBuffer += toRaw(p)
+            val pts = ArrayList(moveBuffer)
+            val seq = strokeSeq
+            // [G] Move callbacks carry every sample. If they did not arrive (2 points for a long
+            // stroke), wait for the list instead of committing a straight segment.
+            val usable = pts.size >= 3 || isDot(pts)
+            if (usable) committedSeq = seq
+            main.post {
+                strokeInProgress = false
+                onPenActivity()
+                if (usable) {
+                    lastCommitSource = "moves (${pts.size} pts)"
+                    listener?.onStrokeEnd(pts, up)
+                flushRepaint()
+                }
+            }
         }
 
         override fun onRawDrawingTouchPointListReceived(list: TouchPointList) {
+            val now = SystemClock.uptimeMillis()
+            val up = if (penUpAt > 0) penUpAt else now
+            val delay = now - up
+            val seq = strokeSeq
+            if (committedSeq == seq) {
+                main.post { lastListDelayMs = delay }
+                return
+            }
             val pts = list.points.map { toRaw(it) }
             if (pts.isEmpty()) return
-            val up = if (penUpAt > 0) penUpAt else SystemClock.uptimeMillis()
-            val delay = SystemClock.uptimeMillis() - up
+            committedSeq = seq
             main.post {
                 strokeInProgress = false
                 onPenActivity()
                 lastListDelayMs = delay
+                lastCommitSource = "point list (${pts.size} pts)"
                 listener?.onStrokeEnd(pts, up)
+                flushRepaint()
             }
         }
 
         override fun onBeginRawErasing(b: Boolean, p: TouchPoint) {
+            strokeSeq++
+            moveBuffer.clear()
+            moveBuffer += toRaw(p)
             main.post {
                 strokeInProgress = true
                 onPenActivity()
             }
         }
 
-        override fun onRawErasingTouchPointMoveReceived(p: TouchPoint) {}
+        override fun onRawErasingTouchPointMoveReceived(p: TouchPoint) {
+            moveBuffer += toRaw(p)
+        }
 
-        override fun onEndRawErasing(b: Boolean, p: TouchPoint) {}
+        // Same late-list issue as drawing: erase at pen-up from the move samples.
+        override fun onEndRawErasing(b: Boolean, p: TouchPoint) {
+            moveBuffer += toRaw(p)
+            val pts = ArrayList(moveBuffer)
+            val up = SystemClock.uptimeMillis()
+            committedSeq = strokeSeq
+            main.post {
+                strokeInProgress = false
+                onPenActivity()
+                listener?.onEraseEnd(pts, up)
+                flushRepaint()
+            }
+        }
 
         override fun onRawErasingTouchPointListReceived(list: TouchPointList) {
+            if (committedSeq == strokeSeq) return
             val pts = list.points.map { toRaw(it) }
             if (pts.isEmpty()) return
+            committedSeq = strokeSeq
             val up = SystemClock.uptimeMillis()
             main.post {
                 strokeInProgress = false
                 onPenActivity()
                 listener?.onEraseEnd(pts, up)
+                flushRepaint()
             }
         }
     }
@@ -399,7 +561,38 @@ class OnyxInkBackend : InkBackend {
         return RawPoint(x, y, pressure.coerceIn(0f, 1f), p.timestamp)
     }
 
+    @Volatile private var lastMoveSent = 0L
+
+    // Reader thread only ([I] all RawInputCallback methods run on one SDK thread).
+    private val moveBuffer = ArrayList<RawPoint>(512)
+    @Volatile private var strokeSeq = 0
+    @Volatile private var committedSeq = -1
+    private var lastCommitSource = "none"
+
+    /** A tap: begin and end within half a millimetre or so. */
+    private fun isDot(pts: List<RawPoint>): Boolean {
+        val a = pts.first()
+        val b = pts.last()
+        return kotlin.math.hypot(a.x - b.x, a.y - b.y) < 6f
+    }
+
     private companion object {
+        /** Line preview refresh interval. [G] fast enough to feel live in A2, slow enough to keep up. */
+        const val MOVE_THROTTLE_MS = 60L
+
+        fun sdkStyle(t: Tool): Int = when (t) {
+            Tool.PENCIL -> TouchHelper.STROKE_STYLE_PENCIL
+            Tool.FOUNTAIN -> TouchHelper.STROKE_STYLE_FOUNTAIN
+            Tool.MARKER -> TouchHelper.STROKE_STYLE_MARKER
+            Tool.BRUSH -> TouchHelper.STROKE_STYLE_NEO_BRUSH
+            Tool.CHARCOAL -> TouchHelper.STROKE_STYLE_CHARCOAL
+            Tool.DASH -> TouchHelper.STROKE_STYLE_DASH
+            Tool.CHARCOAL2 -> TouchHelper.STROKE_STYLE_CHARCOAL_V2
+        }
+
+        /** Raw drawing stays off this long after an app repaint, so it reaches the screen. */
+        const val REPAINT_HOLD_MS = 250L
+
         /** Release the SDK this long after the last pen activity. */
         const val PEN_IDLE_MS = 1500L
     }

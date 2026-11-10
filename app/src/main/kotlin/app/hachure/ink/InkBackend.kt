@@ -3,6 +3,7 @@ package app.hachure.ink
 import android.graphics.Rect
 import android.view.MotionEvent
 import android.view.View
+import app.hachure.model.Tool
 
 /** One raw stylus sample in view pixels. */
 data class RawPoint(
@@ -75,6 +76,38 @@ interface InkBackend {
 
     /** One full-quality refresh to clear e-ink ghosting. Never called automatically. */
     fun cleanScreen(target: View)
+
+    /**
+     * Current brush for live ink. [liveInk] false means report points but draw nothing (line and
+     * eraser tools); [wantMoves] asks for throttled move samples for an app-drawn preview.
+     */
+    fun setBrush(tool: Tool, widthPx: Float, liveInk: Boolean, wantMoves: Boolean) {}
+
+    /**
+     * The view just repainted something the backend's live ink did not already show (erase, undo,
+     * redo, clear, a line-tool stroke). Backends that hold the panel while inking must let that
+     * repaint reach the screen.
+     */
+    fun showRepaint() {}
+
+    /**
+     * The activity window gained or lost input focus. Another window on top (the Boox naviball
+     * menu, a system panel, one of our menus) must get its touches, so backends that claim the
+     * digitizer let go while focus is away.
+     */
+    fun setWindowFocused(focused: Boolean) {}
+
+    /**
+     * Show a live trail under the stylus eraser end, where the backend can ink one itself. The
+     * view repaints the trail away when the erase ends.
+     */
+    fun setEraserTrail(on: Boolean) {}
+
+    /**
+     * A system panel that does not take window focus is open over the canvas (the Boox naviball
+     * menu, a system dialog). [reason] is shown in the debug overlay; null means none is open.
+     */
+    fun setSystemUiOpen(reason: String?) {}
 
     /** Extra lines for the debug overlay. */
     fun debugInfo(): List<String> = emptyList()

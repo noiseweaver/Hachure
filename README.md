@@ -104,7 +104,7 @@ Delete the `.b64` file afterwards. Never commit the keystore (`*.jks` is in `.gi
 | `core` `app.hachure.geometry` | Vectors, unit conversion, projection and snapping math. Pure Kotlin, no Android. |
 | `app` `app.hachure.ink` | `InkBackend` interface, `MotionEventInkBackend`, Onyx backend (Milestone 2). |
 | `app` `app.hachure.render` | Tool renderers and layers. |
-| `app` `app.hachure.ui` | Activity, canvas view, toolbars. |
+| `app` `app.hachure.ui` | Activity, canvas view, tool rail and puck. |
 
 `core` is a separate JVM module, so the compiler enforces that model and geometry have no Android
 dependencies. Its tests run without the Android SDK installed:
@@ -150,16 +150,27 @@ removes all of them and CI fails if the APK declares any permission.
    and commits both to that branch.
 3. Pull the branch and check the diff of `SHA256SUMS` before merging.
 
+## Drawing screen
+
+The tools live on a rail along the left edge. Drag the grip at the top of the rail away from the
+edge and it becomes a floating puck; tap the puck to open its ring of tools, and drag it to either
+edge to dock it there again. A finger tap outside the ring closes it.
+
+- **Pencil**, **Fountain** and the **Style** button pick a brush. Style lists all seven A2 styles
+  (pencil, fountain, marker, brush, charcoal, dash, charcoal 2); brush and charcoal 2 are marked
+  experimental because other apps have seen crashes with them.
+- **Line** draws a straight stroke from pen-down to pen-up. **Eraser** removes whole strokes it
+  touches. Tap either again to go back to drawing. The stylus eraser end always erases.
+- **Width** cycles fine, medium and bold. **Undo** and **Redo** cover drawing, erasing and clearing.
+- **More** holds Show button labels (off by default), Dot grid, Clear page and Debug overlay.
+
+Buttons are 9 mm and the rail 10 mm wide, measured from the panel's real dpi.
+
 ## Debug overlay
 
-Tap **Debug** in the toolbar. It shows the active backend (and why it fell back, if it did), the
-device, the hidden API bypass result, panel dpi, app version, the SDK limit and exclude rects, and
-per stroke the time from pen-up to the stroke being committed. On Onyx devices an extra **Pts**
-button switches how SDK point coordinates are read (screen or view) in case committed strokes land
-offset from the live ink. On the Note Air 2 they are view-local, which is the default.
-
-On Onyx devices the **Style** toolbar button picks any of the SDK's seven live A2 stroke styles:
-pencil, fountain, marker, brush, charcoal, dash and charcoal 2. Brush and charcoal 2 are marked
-experimental because other apps have seen crashes with them.
+Open **More > Debug overlay**. It shows the active backend (and why it fell back, if it did), the
+device, the hidden API bypass result, panel dpi, app version, the SDK limit and exclude rects, any
+brush whose SDK renderer failed, and per stroke the time from pen-up to the stroke being committed.
+While it is open, More also offers the pen release and point coordinate switches.
 
 **Clean** does a single full refresh to clear e-ink ghosting. It never runs automatically.
