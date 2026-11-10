@@ -77,6 +77,9 @@ class MainActivity : Activity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         canvas.backend.setWindowFocused(hasFocus)
+        // Way out if a "closed" broadcast was missed: opening and closing any of our menus
+        // (or coming back to the app) returns focus and clears the block.
+        if (hasFocus && ::systemUi.isInitialized) systemUi.reset()
         if (debugVisible()) renderDebug()
     }
 
