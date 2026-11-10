@@ -109,6 +109,19 @@ interface InkBackend {
      */
     fun setSystemUiOpen(reason: String?) {}
 
+    /**
+     * Milliseconds since the stylus last touched the canvas (0 while it is down). Guides use it
+     * to tell a deliberate finger from a resting hand. Hover does not count: the pen may hover in
+     * one hand while the other moves a ruler. Large when the pen has not been used yet.
+     */
+    fun msSincePen(): Long = Long.MAX_VALUE
+
+    /**
+     * A finger is dragging a guide. Backends that hold the panel let go for the duration and may
+     * switch the view to a fast refresh so the drag outline keeps up.
+     */
+    fun setGuideDrag(on: Boolean) {}
+
     /** Extra lines for the debug overlay. */
     fun debugInfo(): List<String> = emptyList()
 }

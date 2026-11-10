@@ -12,6 +12,9 @@
     <string name="tool_line">Line</string>
     <string name="tool_eraser">Eraser</string>
     <string name="tool_width">Width</string>
+    <string name="tool_ruler">Ruler</string>
+    <string name="tool_snap">Snap</string>
+    <string name="tool_lock_all">Lock all</string>
     <string name="tool_undo">Undo</string>
     <string name="tool_redo">Redo</string>
     <string name="tool_clean">Clean</string>
@@ -25,6 +28,21 @@
     <string name="brush_dash">Dash</string>
     <string name="brush_charcoal2">Charcoal 2 (experimental)</string>
 
+
+    <!-- Guide strip, shown while a ruler is selected. -->
+    <string name="guide_angle">Angle</string>
+    <string name="guide_angle_snap">Snap 15°</string>
+    <string name="guide_hatch">Hatch</string>
+    <string name="guide_hatch_off">off</string>
+    <string name="guide_closer">Closer</string>
+    <string name="guide_spacing">Spacing</string>
+    <string name="guide_wider">Wider</string>
+    <string name="guide_lock">Lock</string>
+    <string name="guide_delete">Delete</string>
+    <string name="guide_done">Done</string>
+    <string name="ruler_limit">A page holds up to %1$d rulers</string>
+    <string name="angle_title">Ruler angle</string>
+    <string name="angle_hint">Degrees. 0 is horizontal, 45 rises to the right, 90 is vertical.</string>
 
     <string name="menu_labels">Show button labels</string>
     <string name="menu_grid">Dot grid</string>

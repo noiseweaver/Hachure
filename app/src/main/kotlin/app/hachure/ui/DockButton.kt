@@ -34,6 +34,9 @@ class DockButton(context: Context) : View(context) {
 
     var round = false
 
+    /** Glyph text height as a fraction of the icon box. */
+    var glyphScale = 0.42f
+
     /** Icon box edge in px. */
     var iconPx = 48
 
@@ -95,7 +98,7 @@ class DockButton(context: Context) : View(context) {
             }
             glyph != null -> {
                 glyphPaint.color = fg
-                glyphPaint.textSize = box * 0.42f
+                glyphPaint.textSize = box * glyphScale
                 canvas.drawText(glyph!!, cx, cy - (glyphPaint.ascent() + glyphPaint.descent()) / 2f, glyphPaint)
             }
             else -> icon?.let {

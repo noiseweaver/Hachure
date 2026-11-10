@@ -1,5 +1,7 @@
 package app.hachure.model
 
+import app.hachure.geometry.Hatch
+
 /**
  * Undo and redo for one [Page]. Every undoable change goes through here.
  *
@@ -9,7 +11,8 @@ package app.hachure.model
 class History(private val page: Page, private val limit: Int = 500) {
 
     private sealed interface Edit
-    private class Added(val stroke: Stroke) : Edit
+    /** [rulerId] stepped by ([dx], [dy]) when the stroke was drawn (hatching); 0 = no ruler. */
+    private class Added(val stroke: Stroke, val rulerId: Long, val dx: Float, val dy: Float) : Edit
     /** Removal batches in the order they happened; indices are valid for that moment only. */
     private class Removed(val batches: MutableList<List<IndexedValue<Stroke>>>) : Edit
 
@@ -36,10 +39,32 @@ class History(private val page: Page, private val limit: Int = 500) {
     val canUndo get() = undoStack.isNotEmpty()
     val canRedo get() = redoStack.isNotEmpty()
 
-    fun add(stroke: Stroke): List<Stroke> {
+    /** True when the last [undo] or [redo] moved a ruler, so the guides need repainting. */
+    var guideMoved = false
+        private set
+
+    /**
+     * Adds a stroke. With [hatched] the ruler's hatch step is applied too, and both are undone
+     * and redone together.
+     */
+    fun add(stroke: Stroke, hatched: Ruler? = null): List<Stroke> {
         page.add(stroke)
-        push(Added(stroke))
+        if (hatched != null) {
+            val step = Hatch.step(hatched)
+            shiftRuler(hatched.id, step.x, step.y)
+            push(Added(stroke, hatched.id, step.x, step.y))
+        } else {
+            push(Added(stroke, 0L, 0f, 0f))
+        }
         return listOf(stroke)
+    }
+
+    /** Moves the ruler if it still exists; a deleted ruler is simply left alone. */
+    private fun shiftRuler(id: Long, dx: Float, dy: Float): Boolean {
+        if (id == 0L || (dx == 0f && dy == 0f)) return false
+        val r = page.ruler(id) ?: return false
+        page.putRuler(r.copy(cx = r.cx + dx, cy = r.cy + dy))
+        return true
     }
 
     /** Removes the strokes with these ids. Returns the removed strokes, or empty if none matched. */
@@ -61,10 +86,14 @@ class History(private val page: Page, private val limit: Int = 500) {
     fun clear(): List<Stroke> = erase(page.strokes.mapTo(HashSet()) { it.id })
 
     fun undo(): List<Stroke> {
+        guideMoved = false
         val e = undoStack.removeLastOrNull() ?: return emptyList()
         redoStack.addLast(e)
         return when (e) {
-            is Added -> listOfNotNull(page.removeLast(e.stroke.id))
+            is Added -> {
+                guideMoved = shiftRuler(e.rulerId, -e.dx, -e.dy)
+                listOfNotNull(page.removeLast(e.stroke.id))
+            }
             is Removed -> {
                 for (b in e.batches.asReversed()) page.restore(b)
                 e.batches.flatMap { b -> b.map { it.value } }
@@ -73,10 +102,15 @@ class History(private val page: Page, private val limit: Int = 500) {
     }
 
     fun redo(): List<Stroke> {
+        guideMoved = false
         val e = redoStack.removeLastOrNull() ?: return emptyList()
         undoStack.addLast(e)
         return when (e) {
-            is Added -> { page.add(e.stroke); listOf(e.stroke) }
+            is Added -> {
+                page.add(e.stroke)
+                guideMoved = shiftRuler(e.rulerId, e.dx, e.dy)
+                listOf(e.stroke)
+            }
             is Removed -> e.batches.flatMap { b -> page.remove(b.mapTo(HashSet()) { it.value.id }).map { it.value } }
         }
     }

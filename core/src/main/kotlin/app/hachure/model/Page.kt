@@ -16,6 +16,26 @@ class Page(
 
     private var nextId = 1L
 
+    private val _rulers = ArrayList<Ruler>()
+
+    /** Guides are part of the page but not of the ink: they are never erased with strokes. */
+    val rulers: List<Ruler> get() = _rulers
+
+    private var nextGuideId = 1L
+
+    fun newGuideId(): Long = nextGuideId++
+
+    fun ruler(id: Long): Ruler? = _rulers.firstOrNull { it.id == id }
+
+    /** Adds the ruler, or replaces the one with the same id (keeping its place in the list). */
+    fun putRuler(r: Ruler) {
+        val i = _rulers.indexOfFirst { it.id == r.id }
+        if (i >= 0) _rulers[i] = r else _rulers += r
+        if (r.id >= nextGuideId) nextGuideId = r.id + 1
+    }
+
+    fun removeRuler(id: Long): Boolean = _rulers.removeAll { it.id == id }
+
     init {
         require(widthMm > 0f && heightMm > 0f) { "page size must be positive" }
     }

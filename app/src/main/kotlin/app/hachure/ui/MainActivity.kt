@@ -1,12 +1,15 @@
 package app.hachure.ui
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.graphics.Rect
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.text.InputType
 import android.view.View
 import android.view.ViewTreeObserver
+import android.widget.EditText
 import android.widget.PopupMenu
 import android.widget.TextView
 import android.widget.Toast
@@ -14,7 +17,9 @@ import app.hachure.BuildConfig
 import app.hachure.R
 import app.hachure.ink.InkDiagnostics
 import app.hachure.ink.OnyxInkBackend
+import app.hachure.geometry.Guides
 import app.hachure.model.DotGrid
+import app.hachure.model.Ruler
 import app.hachure.model.Tool
 import app.hachure.model.WidthPreset
 import app.hachure.store.NotebookStore
@@ -26,6 +31,7 @@ class MainActivity : Activity() {
 
     private lateinit var canvas: CanvasView
     private lateinit var dock: ToolDock
+    private lateinit var strip: GuideStrip
     private lateinit var debugOverlay: TextView
     private lateinit var prefs: Prefs
     private var lastStats: String? = null
@@ -48,6 +54,7 @@ class MainActivity : Activity() {
 
         canvas = findViewById(R.id.canvas)
         dock = findViewById(R.id.dock)
+        strip = findViewById(R.id.guide_strip)
         debugOverlay = findViewById(R.id.debug_overlay)
 
         store = NotebookStore(ShelfActivity.notebooksDir(this))
@@ -58,6 +65,14 @@ class MainActivity : Activity() {
         canvas.widthPreset = prefs.width
         canvas.dotGrid = if (prefs.dotGrid) DotGrid() else null
         canvas.eraserTrail = prefs.eraserTrail
+
+        canvas.guides.snapEnabled = prefs.snap
+        canvas.guides.lockAll = prefs.lockAll
+        canvas.guides.angleSnap = prefs.angleSnap
+        canvas.guides.onSelectionChanged = { updateStrip() }
+        canvas.guides.onAngleEntry = { askAngle(it) }
+        strip.showLabels = prefs.showLabels
+        strip.onAction = { onStripAction(it) }
 
         dock.showLabels = prefs.showLabels
         dock.restore(prefs.dock, prefs.puckFx, prefs.puckFy)
@@ -190,6 +205,19 @@ class MainActivity : Activity() {
                 canvas.widthPreset = next
                 prefs.width = next
             }
+            ToolDock.Item.RULER -> {
+                if (!canvas.guides.addRuler()) {
+                    Toast.makeText(this, getString(R.string.ruler_limit, Guides.MAX_RULERS), Toast.LENGTH_SHORT).show()
+                }
+            }
+            ToolDock.Item.SNAP -> {
+                prefs.snap = !prefs.snap
+                canvas.guides.snapEnabled = prefs.snap
+            }
+            ToolDock.Item.LOCK -> {
+                prefs.lockAll = !prefs.lockAll
+                canvas.guides.lockAll = prefs.lockAll
+            }
             ToolDock.Item.UNDO -> canvas.undo()
             ToolDock.Item.REDO -> canvas.redo()
             ToolDock.Item.CLEAN -> canvas.cleanScreen()
@@ -219,8 +247,50 @@ class MainActivity : Activity() {
                 extraTool = prefs.extraTool,
                 canUndo = canvas.canUndo,
                 canRedo = canvas.canRedo,
+                snap = prefs.snap,
+                lockAll = prefs.lockAll,
             ),
         )
+    }
+
+    private fun updateStrip() = strip.show(canvas.guides.selected, prefs.angleSnap)
+
+    private fun onStripAction(a: GuideStrip.Action) {
+        val g = canvas.guides
+        when (a) {
+            GuideStrip.Action.ANGLE -> g.selected?.let { askAngle(it) }
+            GuideStrip.Action.ANGLE_SNAP -> {
+                prefs.angleSnap = !prefs.angleSnap
+                g.angleSnap = prefs.angleSnap
+                updateStrip()
+            }
+            GuideStrip.Action.HATCH -> g.cycleHatch()
+            GuideStrip.Action.SPACING_DOWN -> g.changeSpacing(-1)
+            GuideStrip.Action.SPACING_UP -> g.changeSpacing(1)
+            GuideStrip.Action.SPACING -> {}
+            GuideStrip.Action.LOCK -> g.toggleLock()
+            GuideStrip.Action.DELETE -> g.deleteSelected()
+            GuideStrip.Action.DONE -> g.deselect()
+        }
+    }
+
+    /** Numeric angle entry. The dialog takes window focus, which pauses inking by itself. */
+    private fun askAngle(r: Ruler) {
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(GuideController.angleLabel(r).removeSuffix("°"))
+            selectAll()
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.angle_title)
+            .setMessage(R.string.angle_hint)
+            .setView(input)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                val deg = input.text.toString().replace(',', '.').toFloatOrNull()
+                if (deg != null && deg in 0f..360f) canvas.guides.setDisplayAngle(r.id, deg)
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     /** Inking is paused while a menu covers the canvas. */
@@ -270,6 +340,7 @@ class MainActivity : Activity() {
                 M_LABELS -> {
                     prefs.showLabels = !prefs.showLabels
                     dock.showLabels = prefs.showLabels
+                    strip.showLabels = prefs.showLabels
                 }
                 M_GRID -> {
                     prefs.dotGrid = !prefs.dotGrid
@@ -312,6 +383,7 @@ class MainActivity : Activity() {
             )
             canvas.backend.debugInfo().forEach { appendLine(it) }
             appendLine(canvas.eraseDebug())
+            appendLine(canvas.guideDebug())
             canvas.rendererError()?.let { appendLine("render fallback: $it") }
             append(lastStats ?: getString(R.string.debug_no_strokes))
         }
@@ -326,6 +398,10 @@ class MainActivity : Activity() {
         if (debugVisible()) {
             val r = Rect()
             if (debugOverlay.getGlobalVisibleRect(r)) rects += r
+        }
+        if (strip.visibility == View.VISIBLE) {
+            val r = Rect()
+            if (strip.getGlobalVisibleRect(r)) rects += r
         }
         canvas.backend.setExcludeRects(rects)
     }

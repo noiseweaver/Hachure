@@ -13,6 +13,7 @@ import android.view.MotionEvent
 import android.view.View
 import app.hachure.geometry.Hit
 import app.hachure.geometry.PageTransform
+import app.hachure.geometry.Snap
 import app.hachure.geometry.Units
 import app.hachure.geometry.Vec2
 import app.hachure.ink.InkBackend
@@ -26,6 +27,7 @@ import app.hachure.model.DotGrid
 import app.hachure.model.History
 import app.hachure.model.InkPoint
 import app.hachure.model.Page
+import app.hachure.model.Ruler
 import app.hachure.model.Stroke
 import app.hachure.model.Tool
 import app.hachure.model.WidthPreset
@@ -38,7 +40,8 @@ import app.hachure.render.StrokeRenderer
  * The drawing surface.
  *
  * Layers, bottom to top: paper (white) and dot grid, committed strokes (both in one bitmap), app
- * live layer (live stroke when the backend does not ink it, line preview).
+ * live layer (live stroke when the backend does not ink it, line preview), guides (rulers, drawn
+ * straight from the model on every draw, never into the bitmap).
  *
  * Refresh rule: one partial invalidate per pen-up, undo, redo or erase, covering only the
  * strokes that changed. The live layer uses small dirty-rect invalidates.
@@ -46,7 +49,7 @@ import app.hachure.render.StrokeRenderer
 class CanvasView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
-) : View(context, attrs), InkListener {
+) : View(context, attrs), InkListener, GuideController.Host {
 
     enum class Mode { DRAW, LINE, ERASE }
 
@@ -103,6 +106,20 @@ class CanvasView @JvmOverloads constructor(
     private var lastLive: RawPoint? = null
     private val dirty = Rect()
 
+    /** Rulers: drawing, finger handles, snap and lock switches. */
+    val guides = GuideController(this)
+
+    override val guidePage: Page? get() = page
+    override val guideTransform: PageTransform get() = transform
+    override val guideBackend: InkBackend get() = backend
+
+    override fun invalidateGuides(r: Rect) = invalidate(r)
+
+    override fun guidesEdited() {
+        backend.showRepaint()
+        pageEdited?.invoke()
+    }
+
     init {
         setBackgroundColor(Color.WHITE)
         isFocusable = false
@@ -115,13 +132,17 @@ class CanvasView @JvmOverloads constructor(
     fun setPage(p: Page) {
         page = p
         history = History(p)
+        guides.reset()
         rebuild(null)
         historyChanged?.invoke()
     }
 
     /** Copy of the page for saving off the UI thread. */
     fun pageSnapshot(): Page? = page?.let { src ->
-        Page(src.widthMm, src.heightMm).also { copy -> src.snapshot().forEach { copy.add(it) } }
+        Page(src.widthMm, src.heightMm).also { copy ->
+            src.snapshot().forEach { copy.add(it) }
+            src.rulers.forEach { copy.putRuler(it) }
+        }
     }
 
     val canUndo get() = history?.canUndo == true
@@ -259,6 +280,7 @@ class CanvasView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         committed?.let { canvas.drawBitmap(it, 0f, 0f, null) }
+        guides.draw(canvas)
         if (!liveActive) return
         val s = lineStart
         val e = lineEnd
@@ -270,9 +292,22 @@ class CanvasView @JvmOverloads constructor(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER) liveErase(event)
-        return backend.onTouchEvent(event) || super.onTouchEvent(event)
+        val tool = event.getToolType(0)
+        if (tool == MotionEvent.TOOL_TYPE_FINGER) {
+            // Fingers move guides and never draw. A gesture that starts on a ruler stays with it.
+            if (event.actionMasked == MotionEvent.ACTION_DOWN) fingerOnGuide = guides.onFingerEvent(event)
+            else if (fingerOnGuide) guides.onFingerEvent(event)
+            if (fingerOnGuide) return true
+        }
+        if (tool == MotionEvent.TOOL_TYPE_ERASER) liveErase(event)
+        // The backend sees the pen first: if a finger was dragging a guide, it must learn that
+        // the stroke began while inking was still off (see OnyxInkBackend.heldStrokeEvent).
+        val handled = backend.onTouchEvent(event)
+        if (tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER) guides.penSeen()
+        return handled || super.onTouchEvent(event)
     }
+
+    private var fingerOnGuide = false
 
     // Live erasing with the stylus eraser end. The SDK's erase callbacks can arrive seconds
     // late on the Note Air 2, but Android still delivers TOOL_TYPE_ERASER MotionEvents to the
@@ -340,9 +375,24 @@ class CanvasView @JvmOverloads constructor(
 
     fun clearPage() = applyChange(history?.clear().orEmpty())
 
-    fun undo() = applyChange(history?.undo().orEmpty())
+    fun undo() = stepHistory { it.undo() }
 
-    fun redo() = applyChange(history?.redo().orEmpty())
+    fun redo() = stepHistory { it.redo() }
+
+    /** Undo or redo. A hatched stroke takes its ruler step with it, so the rulers repaint too. */
+    private fun stepHistory(step: (History) -> List<Stroke>) {
+        val h = history ?: return
+        val before = Rect()
+        guides.allBounds(before)
+        val changed = step(h)
+        if (h.guideMoved) {
+            val after = Rect()
+            guides.allBounds(after)
+            before.union(after)
+            invalidate(before)
+        }
+        applyChange(changed)
+    }
 
     private fun applyChange(changed: List<Stroke>) {
         if (changed.isEmpty()) return
@@ -357,6 +407,7 @@ class CanvasView @JvmOverloads constructor(
     // InkListener
 
     override fun onStrokeBegin(point: RawPoint) {
+        guides.penSeen()
         if (!appDrawsLive() || (mode == Mode.ERASE && !eraserTrail)) return
         livePaint.strokeWidth = if (mode == Mode.ERASE) trailPx() else widthPx()
         liveActive = true
@@ -435,7 +486,7 @@ class CanvasView @JvmOverloads constructor(
         if (points.isEmpty()) return
         val renderStart = SystemClock.uptimeMillis()
         val t0 = points.first().timeMs
-        val inkPoints = if (straight && points.size > 1) {
+        var inkPoints = if (straight && points.size > 1) {
             val a = transform.viewToPage(Vec2(points.first().x, points.first().y))
             val b = transform.viewToPage(Vec2(points.last().x, points.last().y))
             val pressure = points.map { it.pressure }.sorted()[points.size / 2]
@@ -443,18 +494,71 @@ class CanvasView @JvmOverloads constructor(
         } else {
             points.map { toPage(it, t0) }
         }
+
+        // Snap, option A: the stroke was inked freehand; if it started within the snap band of a
+        // ruler edge it is projected onto that edge now. With hatching on, the ruler then steps.
+        val hit = if (guides.snapEnabled && pg.rulers.isNotEmpty()) {
+            Snap.nearestEdge(pg.rulers, Vec2(inkPoints.first().x, inkPoints.first().y), Snap.DEFAULT_BAND_MM)
+        } else {
+            null
+        }
+        var hatched: Ruler? = null
+        val rulerBefore = Rect()
+        if (hit != null) {
+            inkPoints = Snap.project(inkPoints, hit.edge)
+            if (hit.ruler.hatchDir != 0) {
+                hatched = hit.ruler
+                guides.boundsOf(hit.ruler, rulerBefore)
+            }
+        }
+
         val stroke = Stroke(pg.newStrokeId(), tool, tool.widthMm(widthPreset), inkPoints)
-        h.add(stroke)
+        h.add(stroke, hatched)
         val c = committedCanvas ?: return
-        strokeRenderer.drawStroke(c, stroke, transform)
-        regionOf(listOf(stroke))?.let { invalidate(it) }
-        // The SDK inked nothing for a line-tool stroke, so this repaint has to be shown.
-        if (straight) backend.showRepaint()
+        if (hit == null) {
+            strokeRenderer.drawStroke(c, stroke, transform)
+            regionOf(listOf(stroke))?.let { invalidate(it) }
+            // The SDK inked nothing for a line-tool stroke, so this repaint has to be shown.
+            if (straight) backend.showRepaint()
+        } else {
+            // The freehand live ink has to go: repaint where it was and where the line now is.
+            val region = rawBounds(points, widthPx() * 1.5f)
+            regionOf(listOf(stroke))?.let { region.union(it) }
+            rebuild(region)
+            if (hatched != null) {
+                invalidate(rulerBefore)
+                pg.ruler(hatched.id)?.let {
+                    guides.boundsOf(it, rulerBefore)
+                    invalidate(rulerBefore)
+                }
+            }
+            backend.showRepaint()
+            snappedStrokes++
+        }
         historyChanged?.invoke()
         pageEdited?.invoke()
 
         val now = SystemClock.uptimeMillis()
         statsListener?.onStrokeCommitted(points.size, now - penUpUptime, now - renderStart)
+    }
+
+    private var snappedStrokes = 0
+
+    fun guideDebug(): String = "${guides.debugLine()}, snapped strokes $snappedStrokes"
+
+    private fun rawBounds(points: List<RawPoint>, padPx: Float): Rect {
+        var l = Float.POSITIVE_INFINITY
+        var t = Float.POSITIVE_INFINITY
+        var r = Float.NEGATIVE_INFINITY
+        var b = Float.NEGATIVE_INFINITY
+        for (p in points) {
+            if (p.x < l) l = p.x
+            if (p.y < t) t = p.y
+            if (p.x > r) r = p.x
+            if (p.y > b) b = p.y
+        }
+        val pad = (padPx + 6f).toInt()
+        return Rect(l.toInt() - pad, t.toInt() - pad, r.toInt() + pad, b.toInt() + pad)
     }
 
     private fun erase(points: List<RawPoint>, radiusMm: Float, trailWidthPx: Float) {
@@ -471,18 +575,7 @@ class CanvasView @JvmOverloads constructor(
     /** Repaints the area a live eraser trail covered, whether or not anything was erased. */
     private fun clearTrail(points: List<RawPoint>, trailWidthPx: Float) {
         if (points.isEmpty()) return
-        var l = Float.POSITIVE_INFINITY
-        var t = Float.POSITIVE_INFINITY
-        var r = Float.NEGATIVE_INFINITY
-        var b = Float.NEGATIVE_INFINITY
-        for (p in points) {
-            if (p.x < l) l = p.x
-            if (p.y < t) t = p.y
-            if (p.x > r) r = p.x
-            if (p.y > b) b = p.y
-        }
-        val pad = (trailWidthPx + 6f).toInt()
-        rebuild(Rect(l.toInt() - pad, t.toInt() - pad, r.toInt() + pad, b.toInt() + pad))
+        rebuild(rawBounds(points, trailWidthPx))
         backend.showRepaint()
     }
 

@@ -223,8 +223,53 @@ class OnyxInkBackend : InkBackend {
         // SDK was released, so wake it.
         val tool = event.getToolType(0)
         val isPen = tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER
-        if (isPen) onPenActivity()
+        if (isPen) {
+            lastPenContactAt = SystemClock.uptimeMillis()
+            onPenActivity()
+        }
+        if (tool == MotionEvent.TOOL_TYPE_STYLUS) heldStrokeEvent(event)
         return isPen
+    }
+
+    // A stroke that starts during a repaint hold (or while a finger drags a guide) would be lost:
+    // raw drawing is off, so the SDK never sees the pen go down. Quick hatching along a ruler
+    // hits this, because every snapped stroke needs a repaint. [I] With raw drawing off the stylus arrives as ordinary
+    // MotionEvents, so such a stroke is collected from those and committed at pen-up. It has no
+    // live ink (it appears when the pen lifts) but it is not dropped. [G] Raw drawing stays off
+    // until that pen-up so the SDK does not pick up the second half of the same stroke.
+
+    private var heldStroke: ArrayList<RawPoint>? = null
+    private var heldStrokes = 0
+
+    private fun heldStrokeEvent(e: MotionEvent) {
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                if (!(repaintHold || guideDrag) || appliedActive == true) return
+                heldStroke = ArrayList<RawPoint>(256).also { it += RawPoint(e.x, e.y, e.pressure.coerceIn(0f, 1f), e.eventTime) }
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val pts = heldStroke ?: return
+                for (i in 0 until e.historySize) {
+                    pts += RawPoint(e.getHistoricalX(i), e.getHistoricalY(i), e.getHistoricalPressure(i).coerceIn(0f, 1f), e.getHistoricalEventTime(i))
+                }
+                pts += RawPoint(e.x, e.y, e.pressure.coerceIn(0f, 1f), e.eventTime)
+            }
+            MotionEvent.ACTION_UP -> {
+                val pts = heldStroke ?: return
+                heldStroke = null
+                pts += RawPoint(e.x, e.y, pts.last().pressure, e.eventTime)
+                heldStrokes++
+                lastCommitSource = "touch events during repaint (${pts.size} pts)"
+                listener?.onStrokeEnd(pts, SystemClock.uptimeMillis())
+                // Nothing inked this stroke live, so its commit has to be shown.
+                repaintPending = true
+                flushRepaint()
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                heldStroke = null
+                applyEnabled()
+            }
+        }
     }
 
     override fun onHoverEvent(event: MotionEvent) {
@@ -232,6 +277,35 @@ class OnyxInkBackend : InkBackend {
         if (tool != MotionEvent.TOOL_TYPE_STYLUS && tool != MotionEvent.TOOL_TYPE_ERASER) return
         // Any hover sample, including exit, counts as activity; the idle timer handles release.
         onPenActivity()
+    }
+
+    /** Last time the pen touched the glass (not hover: the pen may hover while a finger moves a guide). */
+    private var lastPenContactAt = 0L
+
+    override fun msSincePen(): Long = when {
+        strokeInProgress || heldStroke != null -> 0L
+        lastPenContactAt == 0L -> Long.MAX_VALUE
+        else -> SystemClock.uptimeMillis() - lastPenContactAt
+    }
+
+    /**
+     * While a finger drags a guide the SDK must not hold the panel, or the outline would not
+     * show (same reason as [showRepaint]). [I] DU refreshes the moving outline fast, as it does
+     * for the puck drag; afterwards the view goes back to the handwriting repaint mode.
+     */
+    private var guideDrag = false
+
+    override fun setGuideDrag(on: Boolean) {
+        if (guideDrag == on) return
+        guideDrag = on
+        applyEnabled()
+        val v = view ?: return
+        if (on) {
+            runCatching { EpdController.setViewDefaultUpdateMode(v, UpdateMode.DU) }
+                .onFailure { lastError = "drag: ${it.javaClass.simpleName}" }
+        } else {
+            applyEpdMode(v)
+        }
     }
 
     /** Main thread only. */
@@ -312,7 +386,7 @@ class OnyxInkBackend : InkBackend {
         add("A2 live: ${liveTool.id}${if (liveInk) "" else " (ink off)"} ${String.format(Locale.US, "%.1f", liveWidthPx)}px, coords ${if (pointsAreScreenAbsolute) "screen" else "view"}")
         add("limit $limitRect, ${excludeRects.size} exclude, reopens $reopenCount")
         add("release when pen away: ${if (releaseWhenPenAway) "on" else "off"}, pen ${if (penNear) "near" else "away"}, wakes $wakeCount")
-        add("commit from: $lastCommitSource, repaints $repaintCount")
+        add("commit from: $lastCommitSource, repaints $repaintCount, strokes during repaint $heldStrokes")
         add("eraser trail ${if (eraserTrail) "on" else "off"}")
         add("system ui: ${systemUiOpen ?: "none"}, blocks $systemUiBlocks")
         add("window ${if (windowFocused) "focused" else "not focused"}, focus losses $focusLosses")
@@ -392,7 +466,8 @@ class OnyxInkBackend : InkBackend {
     }
 
     private fun isActive() =
-        wantEnabled && !paused && windowFocused && systemUiOpen == null && !repaintHold && (penNear || !releaseWhenPenAway)
+        wantEnabled && !paused && windowFocused && systemUiOpen == null && !repaintHold && !guideDrag &&
+            heldStroke == null && (penNear || !releaseWhenPenAway)
 
     private var appliedActive: Boolean? = null
 
@@ -436,6 +511,7 @@ class OnyxInkBackend : InkBackend {
             moveBuffer += rp
             main.post {
                 strokeInProgress = true
+                heldStroke = null
                 onPenActivity()
                 listener?.onStrokeBegin(rp)
             }
@@ -473,6 +549,7 @@ class OnyxInkBackend : InkBackend {
             if (usable) committedSeq = seq
             main.post {
                 strokeInProgress = false
+                lastPenContactAt = SystemClock.uptimeMillis()
                 onPenActivity()
                 if (usable) {
                     lastCommitSource = "moves (${pts.size} pts)"
@@ -496,6 +573,7 @@ class OnyxInkBackend : InkBackend {
             committedSeq = seq
             main.post {
                 strokeInProgress = false
+                lastPenContactAt = SystemClock.uptimeMillis()
                 onPenActivity()
                 lastListDelayMs = delay
                 lastCommitSource = "point list (${pts.size} pts)"
@@ -526,6 +604,7 @@ class OnyxInkBackend : InkBackend {
             committedSeq = strokeSeq
             main.post {
                 strokeInProgress = false
+                lastPenContactAt = SystemClock.uptimeMillis()
                 onPenActivity()
                 listener?.onEraseEnd(pts, up)
                 flushRepaint()
@@ -540,6 +619,7 @@ class OnyxInkBackend : InkBackend {
             val up = SystemClock.uptimeMillis()
             main.post {
                 strokeInProgress = false
+                lastPenContactAt = SystemClock.uptimeMillis()
                 onPenActivity()
                 listener?.onEraseEnd(pts, up)
                 flushRepaint()

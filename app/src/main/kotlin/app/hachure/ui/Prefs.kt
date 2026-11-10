@@ -20,6 +20,20 @@ class Prefs(context: Context) {
         get() = sp.getBoolean(K_TRAIL, true)
         set(v) = sp.edit().putBoolean(K_TRAIL, v).apply()
 
+    /** Strokes that start near a ruler edge are straightened onto it. */
+    var snap: Boolean
+        get() = sp.getBoolean(K_SNAP, true)
+        set(v) = sp.edit().putBoolean(K_SNAP, v).apply()
+
+    var lockAll: Boolean
+        get() = sp.getBoolean(K_LOCK_ALL, false)
+        set(v) = sp.edit().putBoolean(K_LOCK_ALL, v).apply()
+
+    /** Ruler rotation snaps to 15 degree steps. */
+    var angleSnap: Boolean
+        get() = sp.getBoolean(K_ANGLE_SNAP, false)
+        set(v) = sp.edit().putBoolean(K_ANGLE_SNAP, v).apply()
+
     var dock: ToolDock.Dock
         get() = runCatching { ToolDock.Dock.valueOf(sp.getString(K_DOCK, null)!!) }.getOrDefault(ToolDock.Dock.LEFT)
         set(v) = sp.edit().putString(K_DOCK, v.name).apply()
@@ -50,6 +64,9 @@ class Prefs(context: Context) {
         const val K_LABELS = "show_labels"
         const val K_GRID = "dot_grid"
         const val K_TRAIL = "eraser_trail"
+        const val K_SNAP = "snap"
+        const val K_LOCK_ALL = "lock_all"
+        const val K_ANGLE_SNAP = "angle_snap"
         const val K_DOCK = "dock"
         const val K_PX = "puck_fx"
         const val K_PY = "puck_fy"
