@@ -327,7 +327,10 @@ class CanvasView @JvmOverloads constructor(
 
     private fun applyChange(changed: List<Stroke>) {
         if (changed.isEmpty()) return
-        regionOf(changed)?.let { rebuild(it) }
+        regionOf(changed)?.let {
+            rebuild(it)
+            backend.showRepaint()
+        }
         historyChanged?.invoke()
         pageEdited?.invoke()
     }
@@ -425,6 +428,8 @@ class CanvasView @JvmOverloads constructor(
         val c = committedCanvas ?: return
         strokeRenderer.drawStroke(c, stroke, transform)
         regionOf(listOf(stroke))?.let { invalidate(it) }
+        // The SDK inked nothing for a line-tool stroke, so this repaint has to be shown.
+        if (straight) backend.showRepaint()
         historyChanged?.invoke()
         pageEdited?.invoke()
 

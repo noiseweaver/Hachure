@@ -83,6 +83,13 @@ interface InkBackend {
      */
     fun setBrush(tool: Tool, widthPx: Float, liveInk: Boolean, wantMoves: Boolean) {}
 
+    /**
+     * The view just repainted something the backend's live ink did not already show (erase, undo,
+     * redo, clear, a line-tool stroke). Backends that hold the panel while inking must let that
+     * repaint reach the screen.
+     */
+    fun showRepaint() {}
+
     /** Extra lines for the debug overlay. */
     fun debugInfo(): List<String> = emptyList()
 }

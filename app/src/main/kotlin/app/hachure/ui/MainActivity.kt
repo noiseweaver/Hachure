@@ -20,6 +20,7 @@ import app.hachure.model.WidthPreset
 import app.hachure.store.NotebookStore
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class MainActivity : Activity() {
 
@@ -35,6 +36,7 @@ class MainActivity : Activity() {
     private val saver = Executors.newSingleThreadExecutor()
     private val saveSoon = Runnable { saveNow() }
     private var dirty = false
+    private var saveQueued = false
 
     private val layoutListener = ViewTreeObserver.OnGlobalLayoutListener { pushExcludeRects() }
 
@@ -71,8 +73,12 @@ class MainActivity : Activity() {
         canvas.historyChanged = { updateDock() }
         canvas.pageEdited = {
             dirty = true
-            main.removeCallbacks(saveSoon)
-            main.postDelayed(saveSoon, SAVE_DELAY_MS)
+            // Not a debounce: steady hatching (a stroke every few hundred ms) must not keep
+            // pushing the save back, so one is scheduled only when none is waiting.
+            if (!saveQueued) {
+                saveQueued = true
+                main.postDelayed(saveSoon, SAVE_DELAY_MS)
+            }
         }
         canvas.backendChanged = {
             pushExcludeRects()
@@ -90,7 +96,9 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         canvas.backend.pause()
-        saveNow()
+        // Boox freezes or kills background apps quickly, so the save must be on disk before
+        // this returns. A page is small (14 bytes a point); this takes a few ms.
+        saveNow(wait = true)
         super.onPause()
     }
 
@@ -118,29 +126,40 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Snapshot on the UI thread, write on the saver thread. Saves are serialised. */
-    private fun saveNow() {
+    /**
+     * Snapshot on the UI thread, write on the saver thread. Saves are serialised. With [wait]
+     * the call returns only once every queued save has been written (or after 3 s).
+     */
+    private fun saveNow(wait: Boolean = false) {
         main.removeCallbacks(saveSoon)
+        saveQueued = false
         val id = notebookId ?: return
-        if (!dirty) return
-        val snapshot = canvas.pageSnapshot() ?: return
-        dirty = false
-        saver.execute {
-            try {
-                store.savePage(id, snapshot)
-            } catch (t: Throwable) {
-                main.post {
-                    dirty = true
-                    Toast.makeText(this, getString(R.string.save_failed, t.message ?: t.javaClass.simpleName), Toast.LENGTH_LONG).show()
+        if (dirty) {
+            val snapshot = canvas.pageSnapshot()
+            if (snapshot != null) {
+                dirty = false
+                saver.execute {
+                    try {
+                        store.savePage(id, snapshot)
+                    } catch (t: Throwable) {
+                        main.post {
+                            dirty = true
+                            Toast.makeText(this, getString(R.string.save_failed, t.message ?: t.javaClass.simpleName), Toast.LENGTH_LONG).show()
+                        }
+                    }
                 }
             }
+        }
+        if (wait && !saver.isShutdown) {
+            // An empty task behind the queued saves: when it has run, they are on disk.
+            runCatching { saver.submit {}.get(3, TimeUnit.SECONDS) }
         }
     }
 
     private fun onDockItem(item: ToolDock.Item, anchor: View) {
         when (item) {
             ToolDock.Item.SHELF -> {
-                saveNow()
+                saveNow(wait = true)
                 finish()
                 return
             }
@@ -292,7 +311,7 @@ class MainActivity : Activity() {
     companion object {
         const val EXTRA_NOTEBOOK = "notebook"
 
-        /** Save this long after the last edit, and always on leaving the screen. */
+        /** Save at most this long after an edit, and always (blocking) on leaving the screen. */
         private const val SAVE_DELAY_MS = 800L
 
         private const val M_LABELS = 1
