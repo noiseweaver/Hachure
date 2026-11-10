@@ -150,6 +150,18 @@ removes all of them and CI fails if the APK declares any permission.
    and commits both to that branch.
 3. Pull the branch and check the diff of `SHA256SUMS` before merging.
 
+## Notebooks shelf
+
+The app opens on the shelf: one hatch-patterned cover per notebook, with a New notebook tile
+first. The Recent, A to Z and Archived chips sort and filter. Long-press a cover to rename it,
+change its cover pattern, archive or delete it. The settings button holds the same Show button
+labels and Dot grid switches as the drawing screen.
+
+Notebooks live in the app's private storage (`files/notebooks/<id>/`), one binary page file plus a
+small properties file each. Every edit is saved 0.8 s after the pen lifts and again when leaving
+the page; writes go to a temp file first, so an interrupted save keeps the previous version.
+Uninstalling the app deletes them (export arrives in Milestone 7).
+
 ## Drawing screen
 
 The tools live on a rail along the left edge. Drag the grip at the top of the rail away from the
@@ -162,6 +174,7 @@ edge to dock it there again. A finger tap outside the ring closes it.
 - **Line** draws a straight stroke from pen-down to pen-up. **Eraser** removes whole strokes it
   touches. Tap either again to go back to drawing. The stylus eraser end always erases.
 - **Width** cycles fine, medium and bold. **Undo** and **Redo** cover drawing, erasing and clearing.
+- **Shelf** (top of the rail) saves and goes back to the notebooks.
 - **More** holds Show button labels (off by default), Dot grid, Clear page and Debug overlay.
 
 Buttons are 9 mm and the rail 10 mm wide, measured from the panel's real dpi.

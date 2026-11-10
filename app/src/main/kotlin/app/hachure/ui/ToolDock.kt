@@ -38,6 +38,7 @@ class ToolDock @JvmOverloads constructor(
     enum class Dock { LEFT, RIGHT, FLOATING }
 
     enum class Item(val icon: Int, val label: Int) {
+        SHELF(R.drawable.ic_shelf, R.string.tool_shelf),
         PENCIL(R.drawable.ic_pencil, R.string.tool_pencil),
         FOUNTAIN(R.drawable.ic_fountain, R.string.tool_fountain),
         STYLE(0, R.string.tool_more_styles),

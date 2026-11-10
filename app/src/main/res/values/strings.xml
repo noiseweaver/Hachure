@@ -5,6 +5,7 @@
     <!-- Rail and puck. Short labels: they sit under a 9 mm icon when labels are on. -->
     <string name="tool_grip">Drag to undock</string>
     <string name="tool_puck">Tools</string>
+    <string name="tool_shelf">Shelf</string>
     <string name="tool_pencil">Pencil</string>
     <string name="tool_fountain">Fountain</string>
     <string name="tool_more_styles">Style</string>
@@ -32,6 +33,36 @@
     <string name="menu_debug">Debug overlay</string>
     <string name="menu_release">Release pen when away</string>
     <string name="menu_coords">Points are screen coordinates</string>
+
+    <string name="shelf_title">Notebooks</string>
+    <string name="shelf_settings">Settings</string>
+    <string name="shelf_recent">Recent</string>
+    <string name="shelf_az">A to Z</string>
+    <string name="shelf_archived">Archived</string>
+    <string name="shelf_new">New notebook</string>
+    <string name="shelf_new_title">Notebook %1$d</string>
+    <string name="shelf_hint">Long-press a cover: rename, cover pattern, archive</string>
+    <plurals name="shelf_count">
+        <item quantity="one">%d notebook</item>
+        <item quantity="other">%d notebooks</item>
+    </plurals>
+    <plurals name="cover_caption">
+        <item quantity="one">%1$d page · %2$s</item>
+        <item quantity="other">%1$d pages · %2$s</item>
+    </plurals>
+    <string name="nb_rename">Rename</string>
+    <string name="nb_cover">Cover pattern</string>
+    <string name="nb_archive">Archive</string>
+    <string name="nb_unarchive">Unarchive</string>
+    <string name="nb_delete">Delete</string>
+    <string name="nb_delete_confirm">Delete \"%1$s\"? This cannot be undone.</string>
+    <string name="cover_diagonal">Diagonal</string>
+    <string name="cover_diagonal_back">Diagonal back</string>
+    <string name="cover_cross">Cross-hatch</string>
+    <string name="cover_horizontal">Lines</string>
+    <string name="cover_dots">Dots</string>
+    <string name="save_failed">Could not save: %1$s</string>
+    <string name="load_failed">Could not open this notebook: %1$s</string>
 
     <string name="debug_backend">Backend: %1$s</string>
     <string name="debug_last_stroke">Last stroke: %1$d pts, pen-up to commit %2$d ms (render %3$d ms)</string>
