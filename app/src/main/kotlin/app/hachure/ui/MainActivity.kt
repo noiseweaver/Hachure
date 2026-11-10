@@ -210,6 +210,7 @@ class MainActivity : Activity() {
                     Toast.makeText(this, getString(R.string.ruler_limit, Guides.MAX_RULERS), Toast.LENGTH_SHORT).show()
                 }
             }
+            ToolDock.Item.PERSPECTIVE -> canvas.guides.togglePerspectiveStrip()
             ToolDock.Item.SNAP -> {
                 prefs.snap = !prefs.snap
                 canvas.guides.snapEnabled = prefs.snap
@@ -249,11 +250,24 @@ class MainActivity : Activity() {
                 canRedo = canvas.canRedo,
                 snap = prefs.snap,
                 lockAll = prefs.lockAll,
+                perspective = (canvas.guides.perspective?.points ?: 0) > 0,
             ),
         )
     }
 
-    private fun updateStrip() = strip.show(canvas.guides.selected, prefs.angleSnap)
+    private fun updateStrip() {
+        val g = canvas.guides
+        val ruler = g.selected
+        val item = g.perspectiveItem
+        val ps = g.perspective
+        when {
+            item != null && ps != null -> strip.showPerspective(ps, item)
+            ruler != null -> strip.showRuler(ruler, prefs.angleSnap, ps)
+            else -> strip.hide()
+        }
+        // The rail's Perspective button shows whether perspective is on.
+        updateDock()
+    }
 
     private fun onStripAction(a: GuideStrip.Action) {
         val g = canvas.guides
@@ -268,7 +282,14 @@ class MainActivity : Activity() {
             GuideStrip.Action.SPACING_DOWN -> g.changeSpacing(-1)
             GuideStrip.Action.SPACING_UP -> g.changeSpacing(1)
             GuideStrip.Action.SPACING -> {}
-            GuideStrip.Action.LOCK -> g.toggleLock()
+            GuideStrip.Action.AIM -> g.cycleAim()
+            GuideStrip.Action.ITEM -> g.cyclePerspectiveItem()
+            GuideStrip.Action.POINTS -> g.cyclePoints()
+            GuideStrip.Action.LINES -> g.toggleLines()
+            GuideStrip.Action.FEWER -> g.changeRays(-1)
+            GuideStrip.Action.MORE -> g.changeRays(1)
+            GuideStrip.Action.DENSITY -> {}
+            GuideStrip.Action.LOCK -> if (g.perspectiveItem != null) g.togglePerspectiveLock() else g.toggleLock()
             GuideStrip.Action.DELETE -> g.deleteSelected()
             GuideStrip.Action.DONE -> g.deselect()
         }

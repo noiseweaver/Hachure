@@ -46,6 +46,7 @@ class ToolDock @JvmOverloads constructor(
         ERASER(R.drawable.ic_eraser, R.string.tool_eraser),
         WIDTH(0, R.string.tool_width),
         RULER(R.drawable.ic_ruler, R.string.tool_ruler),
+        PERSPECTIVE(R.drawable.ic_perspective, R.string.tool_perspective),
         SNAP(R.drawable.ic_snap, R.string.tool_snap),
         LOCK(R.drawable.ic_lock, R.string.tool_lock_all),
         UNDO(R.drawable.ic_undo, R.string.tool_undo),
@@ -64,6 +65,7 @@ class ToolDock @JvmOverloads constructor(
         val canRedo: Boolean,
         val snap: Boolean = true,
         val lockAll: Boolean = false,
+        val perspective: Boolean = false,
     )
 
     /** Tapped item and the button it came from (anchor for menus). */
@@ -156,6 +158,7 @@ class ToolDock @JvmOverloads constructor(
             map[Item.LINE]?.isSelected = s.mode == CanvasView.Mode.LINE
             map[Item.ERASER]?.isSelected = s.mode == CanvasView.Mode.ERASE
             map[Item.WIDTH]?.widthBar = mm(WIDTH_BAR_MM[s.width.ordinal]).toFloat().coerceAtLeast(2f)
+            map[Item.PERSPECTIVE]?.isSelected = s.perspective
             map[Item.SNAP]?.isSelected = s.snap
             map[Item.LOCK]?.isSelected = s.lockAll
             map[Item.UNDO]?.isEnabled = s.canUndo
@@ -474,8 +477,8 @@ class ToolDock @JvmOverloads constructor(
         const val GRIP_MM = 7f
         const val ICON_MM = 5f
         const val PUCK_MM = 12f
-        /** 14 buttons of 9 mm need a circumference of at least 126 mm. */
-        const val RING_RADIUS_MM = 23f
+        /** 15 buttons of 9 mm need a circumference of at least 135 mm. */
+        const val RING_RADIUS_MM = 24f
         const val EDGE_MARGIN_MM = 2f
         const val DOCK_ZONE_MM = 15f
         const val TAP_SLOP_MM = 3f

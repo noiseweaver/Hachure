@@ -135,4 +135,20 @@ class HistoryTest {
         assertFalse(h.guideMoved)
         assertTrue(p.strokes.isEmpty())
     }
+
+    @Test fun aimedRulerTurnsAsItStepsAndTurnsBackOnUndo() {
+        val p = Page(200f, 200f); val h = History(p)
+        p.perspective = p.perspective.copy(points = 1).withVp(0, VanishingPoint(-50f, 100f))
+        val start = app.hachure.geometry.Aim.apply(Ruler(1, 100f, 100f, 0f, hatchSpacingMm = 5f, hatchDir = 1, aimVp = 1), p.perspective)
+        p.putRuler(start)
+        h.add(stroke(1), hatched = p.ruler(1))
+        val stepped = p.ruler(1)!!
+        assertTrue(stepped.angleDeg != start.angleDeg)
+        val edge = app.hachure.geometry.RulerGeometry.edge(stepped, 1)
+        assertEquals(0f, edge.distance(app.hachure.geometry.Vec2(-50f, 100f)), 0.02f)
+        h.undo()
+        assertEquals(start.cx, p.ruler(1)!!.cx, 1e-3f)
+        assertEquals(start.cy, p.ruler(1)!!.cy, 1e-3f)
+        assertEquals(start.angleDeg, p.ruler(1)!!.angleDeg, 0.01f)
+    }
 }

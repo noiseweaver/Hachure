@@ -19,11 +19,14 @@ data class Ruler(
     val locked: Boolean = false,
     val hatchSpacingMm: Float = DEFAULT_SPACING_MM,
     val hatchDir: Int = 0,
+    /** 0 = free; 1..3 = the ruler points at that vanishing point, see [app.hachure.geometry.Aim]. */
+    val aimVp: Int = 0,
 ) {
     init {
         require(lengthMm > 0f && widthMm > 0f) { "ruler size must be positive" }
         require(hatchSpacingMm > 0f) { "hatch spacing must be positive" }
         require(hatchDir in -1..1) { "hatchDir must be -1, 0 or 1" }
+        require(aimVp in 0..3) { "aimVp must be 0..3" }
     }
 
     companion object {

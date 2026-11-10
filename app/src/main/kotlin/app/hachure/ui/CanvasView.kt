@@ -13,7 +13,7 @@ import android.view.MotionEvent
 import android.view.View
 import app.hachure.geometry.Hit
 import app.hachure.geometry.PageTransform
-import app.hachure.geometry.Snap
+import app.hachure.geometry.SnapResolver
 import app.hachure.geometry.Units
 import app.hachure.geometry.Vec2
 import app.hachure.ink.InkBackend
@@ -142,6 +142,7 @@ class CanvasView @JvmOverloads constructor(
         Page(src.widthMm, src.heightMm).also { copy ->
             src.snapshot().forEach { copy.add(it) }
             src.rulers.forEach { copy.putRuler(it) }
+            copy.perspective = src.perspective
         }
     }
 
@@ -495,27 +496,24 @@ class CanvasView @JvmOverloads constructor(
             points.map { toPage(it, t0) }
         }
 
-        // Snap, option A: the stroke was inked freehand; if it started within the snap band of a
-        // ruler edge it is projected onto that edge now. With hatching on, the ruler then steps.
-        val hit = if (guides.snapEnabled && pg.rulers.isNotEmpty()) {
-            Snap.nearestEdge(pg.rulers, Vec2(inkPoints.first().x, inkPoints.first().y), Snap.DEFAULT_BAND_MM)
-        } else {
-            null
-        }
+        // Snap, option A: the stroke was inked freehand and is straightened now. A ruler edge
+        // within the snap band wins, then a perspective match, else it stays freehand. With
+        // hatching on, the ruler steps after a stroke along it.
+        val resolved = SnapResolver.resolve(inkPoints, pg.rulers, pg.perspective, guides.snapEnabled)
+        inkPoints = resolved.points
+        val snapped = resolved !is SnapResolver.Freehand
         var hatched: Ruler? = null
         val rulerBefore = Rect()
-        if (hit != null) {
-            inkPoints = Snap.project(inkPoints, hit.edge)
-            if (hit.ruler.hatchDir != 0) {
-                hatched = hit.ruler
-                guides.boundsOf(hit.ruler, rulerBefore)
-            }
+        if (resolved is SnapResolver.OnRuler && resolved.hit.ruler.hatchDir != 0) {
+            hatched = resolved.hit.ruler
+            guides.boundsOf(hatched, rulerBefore)
         }
+        if (resolved is SnapResolver.OnPerspective) perspectiveStrokes++
 
         val stroke = Stroke(pg.newStrokeId(), tool, tool.widthMm(widthPreset), inkPoints)
         h.add(stroke, hatched)
         val c = committedCanvas ?: return
-        if (hit == null) {
+        if (!snapped) {
             strokeRenderer.drawStroke(c, stroke, transform)
             regionOf(listOf(stroke))?.let { invalidate(it) }
             // The SDK inked nothing for a line-tool stroke, so this repaint has to be shown.
@@ -543,8 +541,9 @@ class CanvasView @JvmOverloads constructor(
     }
 
     private var snappedStrokes = 0
+    private var perspectiveStrokes = 0
 
-    fun guideDebug(): String = "${guides.debugLine()}, snapped strokes $snappedStrokes"
+    fun guideDebug(): String = "${guides.debugLine()}, snapped strokes $snappedStrokes ($perspectiveStrokes to perspective)"
 
     private fun rawBounds(points: List<RawPoint>, padPx: Float): Rect {
         var l = Float.POSITIVE_INFINITY

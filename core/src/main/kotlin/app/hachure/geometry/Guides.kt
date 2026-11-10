@@ -1,5 +1,6 @@
 package app.hachure.geometry
 
+import app.hachure.model.Perspective
 import app.hachure.model.Ruler
 import kotlin.math.abs
 
@@ -41,12 +42,18 @@ object Guides {
      * The handle under a finger at [p]: the nearest handle centre within [reachMm], skipping
      * locked rulers. Rulers later in the list are drawn on top and win ties.
      */
-    fun handleAt(rulers: List<Ruler>, p: Vec2, lockAll: Boolean, reachMm: Float = HANDLE_MM / 2f + 1.5f): Grab? {
+    fun handleAt(
+        rulers: List<Ruler>,
+        p: Vec2,
+        lockAll: Boolean,
+        reachMm: Float = HANDLE_MM / 2f + 1.5f,
+        perspective: Perspective? = null,
+    ): Grab? {
         var best: Grab? = null
         var bestD = Float.MAX_VALUE
         for (r in rulers.asReversed()) {
             if (locked(r, lockAll)) continue
-            for (h in Handle.entries) {
+            for (h in handles(r, perspective)) {
                 val d = handlePosition(r, h).distanceTo(p)
                 if (d <= reachMm && d < bestD) {
                     best = Grab(r, h)
@@ -56,6 +63,10 @@ object Guides {
         }
         return best
     }
+
+    /** Handles a ruler offers: an aimed ruler takes its angle from the vanishing point, so it only moves. */
+    fun handles(r: Ruler, perspective: Perspective?): List<Handle> =
+        if (Aim.active(r, perspective)) listOf(Handle.MOVE) else Handle.entries
 
     /** Topmost ruler whose bar contains [p], locked or not (a tap selects it). */
     fun rulerAt(rulers: List<Ruler>, p: Vec2): Ruler? = rulers.lastOrNull { RulerGeometry.contains(it, p) }
