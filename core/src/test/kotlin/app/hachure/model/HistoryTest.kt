@@ -89,4 +89,50 @@ class HistoryTest {
         h.undo()
         assertEquals(setOf(2L, 3L, 9L), ids(p).toSet())
     }
+
+    // Hatching: the ruler's step is part of the stroke's undo step.
+
+    @Test fun hatchedStrokeStepsRulerAndUndoesWithIt() {
+        val p = Page(100f, 100f); val h = History(p)
+        p.putRuler(Ruler(1, 50f, 50f, 0f, hatchSpacingMm = 2f, hatchDir = 1))
+        h.add(stroke(1), hatched = p.ruler(1))
+        h.add(stroke(2), hatched = p.ruler(1))
+        assertEquals(54f, p.ruler(1)!!.cy, 1e-4f)
+        h.undo()
+        assertTrue(h.guideMoved)
+        assertEquals(52f, p.ruler(1)!!.cy, 1e-4f)
+        assertEquals(listOf(1L), ids(p))
+        h.redo()
+        assertTrue(h.guideMoved)
+        assertEquals(54f, p.ruler(1)!!.cy, 1e-4f)
+        assertEquals(listOf(1L, 2L), ids(p))
+    }
+
+    @Test fun plainStrokeLeavesRulerAlone() {
+        val p = Page(100f, 100f); val h = History(p)
+        p.putRuler(Ruler(1, 50f, 50f, 0f, hatchDir = 1))
+        h.add(stroke(1))
+        h.undo()
+        assertFalse(h.guideMoved)
+        assertEquals(50f, p.ruler(1)!!.cy, 1e-4f)
+    }
+
+    @Test fun hatchOffMeansNoStep() {
+        val p = Page(100f, 100f); val h = History(p)
+        p.putRuler(Ruler(1, 50f, 50f, 0f, hatchDir = 0))
+        h.add(stroke(1), hatched = p.ruler(1))
+        assertEquals(50f, p.ruler(1)!!.cy, 1e-4f)
+        h.undo()
+        assertFalse(h.guideMoved)
+    }
+
+    @Test fun undoAfterRulerDeletedOnlyRemovesStroke() {
+        val p = Page(100f, 100f); val h = History(p)
+        p.putRuler(Ruler(1, 50f, 50f, 0f, hatchDir = 1))
+        h.add(stroke(1), hatched = p.ruler(1))
+        p.removeRuler(1)
+        h.undo()
+        assertFalse(h.guideMoved)
+        assertTrue(p.strokes.isEmpty())
+    }
 }

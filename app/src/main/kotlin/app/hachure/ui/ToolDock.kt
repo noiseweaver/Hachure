@@ -45,6 +45,9 @@ class ToolDock @JvmOverloads constructor(
         LINE(R.drawable.ic_line, R.string.tool_line),
         ERASER(R.drawable.ic_eraser, R.string.tool_eraser),
         WIDTH(0, R.string.tool_width),
+        RULER(R.drawable.ic_ruler, R.string.tool_ruler),
+        SNAP(R.drawable.ic_snap, R.string.tool_snap),
+        LOCK(R.drawable.ic_lock, R.string.tool_lock_all),
         UNDO(R.drawable.ic_undo, R.string.tool_undo),
         REDO(R.drawable.ic_redo, R.string.tool_redo),
         CLEAN(R.drawable.ic_clean, R.string.tool_clean),
@@ -59,6 +62,8 @@ class ToolDock @JvmOverloads constructor(
         val extraTool: Tool,
         val canUndo: Boolean,
         val canRedo: Boolean,
+        val snap: Boolean = true,
+        val lockAll: Boolean = false,
     )
 
     /** Tapped item and the button it came from (anchor for menus). */
@@ -133,7 +138,10 @@ class ToolDock @JvmOverloads constructor(
         }
     }
 
-    private fun Item.closesRing() = this != Item.UNDO && this != Item.REDO && this != Item.WIDTH && this != Item.CLEAN
+    private fun Item.closesRing() = when (this) {
+        Item.UNDO, Item.REDO, Item.WIDTH, Item.CLEAN, Item.SNAP, Item.LOCK -> false
+        else -> true
+    }
 
     fun setState(s: State) {
         state = s
@@ -148,6 +156,8 @@ class ToolDock @JvmOverloads constructor(
             map[Item.LINE]?.isSelected = s.mode == CanvasView.Mode.LINE
             map[Item.ERASER]?.isSelected = s.mode == CanvasView.Mode.ERASE
             map[Item.WIDTH]?.widthBar = mm(WIDTH_BAR_MM[s.width.ordinal]).toFloat().coerceAtLeast(2f)
+            map[Item.SNAP]?.isSelected = s.snap
+            map[Item.LOCK]?.isSelected = s.lockAll
             map[Item.UNDO]?.isEnabled = s.canUndo
             map[Item.REDO]?.isEnabled = s.canRedo
         }
@@ -464,7 +474,8 @@ class ToolDock @JvmOverloads constructor(
         const val GRIP_MM = 7f
         const val ICON_MM = 5f
         const val PUCK_MM = 12f
-        const val RING_RADIUS_MM = 19f
+        /** 14 buttons of 9 mm need a circumference of at least 126 mm. */
+        const val RING_RADIUS_MM = 23f
         const val EDGE_MARGIN_MM = 2f
         const val DOCK_ZONE_MM = 15f
         const val TAP_SLOP_MM = 3f

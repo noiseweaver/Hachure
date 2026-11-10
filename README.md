@@ -3,8 +3,9 @@
 A sketching app for the Onyx BOOX Note Air 2 (e-ink, Wacom EMR stylus), built around low-latency
 inking and precise rulers and perspective guides for hatching.
 
-Status: Milestone 2. Onyx pen SDK backend with fast A2 live ink on Boox devices, plain
-`MotionEvent` input elsewhere, debug overlay with stroke timing.
+Status: Milestone 4. Fast A2 live ink through the Onyx pen SDK, notebooks shelf, tool rail and
+puck, eraser, undo, and rulers with snapping and automatic hatch stepping. Perspective guides
+come next (Milestone 5).
 
 ## Install on the Boox with Obtainium (no cable, no adb)
 
@@ -175,9 +176,35 @@ edge to dock it there again. A finger tap outside the ring closes it.
   touches. Tap either again to go back to drawing. The stylus eraser end always erases.
 - **Width** cycles fine, medium and bold. **Undo** and **Redo** cover drawing, erasing and clearing.
 - **Shelf** (top of the rail) saves and goes back to the notebooks.
-- **More** holds Show button labels (off by default), Dot grid, Clear page and Debug overlay.
+- **More** holds Show button labels (off by default), Dot grid, Eraser trail, Clear page and Debug
+  overlay. Clear page removes the ink and keeps the rulers.
 
 Buttons are 9 mm and the rail 10 mm wide, measured from the panel's real dpi.
+
+## Rulers and hatching
+
+**Ruler** on the rail adds a ruler (up to 8 on a page). Rulers are saved with the page.
+
+- Fingers move rulers, the stylus draws. The stylus never moves a ruler and a finger never draws.
+- Each ruler has three 9 mm handles: the middle one moves it, the two near the ends turn it about
+  its centre. While you drag, a dashed outline follows the finger (with the angle while turning)
+  and the ruler itself is redrawn once when you let go.
+- Tap a ruler to select it. A strip appears along the bottom with its angle (tap to type one),
+  15 degree snap for turning, hatch direction, hatch spacing, lock, delete and done. Long-press a
+  handle to type an angle directly. Angles read 0 for horizontal, 45 rising to the right, 90 for
+  vertical.
+- A stroke that starts within 4 mm of a ruler edge is straightened onto that edge when the pen
+  lifts. Its start and end are projected onto the edge and the pressure along it is kept. **Snap**
+  on the rail turns this on and off.
+- Hatching: set a hatch direction on the ruler (the arrow shows which way) and a spacing in mm.
+  After every stroke drawn along the ruler it steps sideways by that spacing, so you only draw.
+  Undo takes the stroke and the step back together.
+- A locked ruler shows a padlock, has no handles and cannot be moved by a finger. It still snaps
+  and still steps when hatching. **Lock all** on the rail locks every ruler at once. Lock a ruler
+  you rest your hand on.
+
+A finger is ignored for half a second after the pen last touched the page, and the pen touching
+down cancels a ruler drag, so a resting hand does not shift things mid-stroke.
 
 ## Debug overlay
 

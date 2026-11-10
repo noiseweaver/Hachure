@@ -55,6 +55,13 @@ class MotionEventInkBackend : InkBackend {
         listener = null
     }
 
+    private var lastPenAt = 0L
+
+    override fun msSincePen(): Long =
+        if (lastPenAt == 0L) Long.MAX_VALUE else android.os.SystemClock.uptimeMillis() - lastPenAt
+
+    private fun isPen(tool: Int) = tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER
+
     override fun cleanScreen(target: View) {
         target.invalidate()
     }
@@ -62,6 +69,7 @@ class MotionEventInkBackend : InkBackend {
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val l = listener ?: return false
         if (!enabled || paused) return false
+        if (isPen(event.getToolType(0))) lastPenAt = android.os.SystemClock.uptimeMillis()
 
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {

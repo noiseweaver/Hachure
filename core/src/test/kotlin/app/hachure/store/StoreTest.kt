@@ -2,6 +2,7 @@ package app.hachure.store
 
 import app.hachure.model.InkPoint
 import app.hachure.model.Page
+import app.hachure.model.Ruler
 import app.hachure.model.Stroke
 import app.hachure.model.Tool
 import org.junit.Assert.assertEquals
@@ -14,6 +15,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.DataOutputStream
 import java.io.IOException
 
 class StoreTest {
@@ -34,6 +36,38 @@ class StoreTest {
         assertEquals(157f, back.widthMm)
         assertEquals(page().strokes, back.strokes)
         assertEquals(8L, back.newStrokeId())
+    }
+
+    @Test fun codecKeepsRulers() {
+        val pg = page().apply {
+            putRuler(Ruler(3, 40f, 60f, 212.5f, 120f, 14f, true, 1.5f, -1))
+            putRuler(Ruler(4, 80f, 90f, 0f))
+        }
+        val out = ByteArrayOutputStream()
+        PageCodec.write(pg, out)
+        val back = PageCodec.read(ByteArrayInputStream(out.toByteArray()))
+        assertEquals(pg.rulers, back.rulers)
+        assertEquals(pg.strokes, back.strokes)
+        assertEquals(5L, back.newGuideId())
+    }
+
+    @Test fun codecReadsVersion1WithoutRulers() {
+        val out = ByteArrayOutputStream()
+        DataOutputStream(out).apply {
+            writeInt(0x48414348); writeInt(1); writeFloat(157f); writeFloat(209f); writeInt(1)
+            writeLong(5); writeUTF(Tool.PENCIL.id); writeFloat(0.3f); writeInt(1)
+            writeFloat(1f); writeFloat(2f); writeFloat(0.5f); writeInt(0)
+            flush()
+        }
+        val back = PageCodec.read(ByteArrayInputStream(out.toByteArray()))
+        assertEquals(1, back.strokes.size)
+        assertEquals(0, back.rulers.size)
+    }
+
+    @Test fun codecRejectsNewerVersion() {
+        val out = ByteArrayOutputStream()
+        DataOutputStream(out).apply { writeInt(0x48414348); writeInt(PageCodec.VERSION + 1); writeFloat(1f); writeFloat(1f); writeInt(0); flush() }
+        assertThrows(IOException::class.java) { PageCodec.read(ByteArrayInputStream(out.toByteArray())) }
     }
 
     @Test fun codecRejectsGarbage() {
