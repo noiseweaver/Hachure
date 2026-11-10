@@ -161,6 +161,35 @@ class OnyxInkBackend : InkBackend {
         applyEnabled()
     }
 
+    /**
+     * [V on device 2026-11-10] With raw drawing enabled the expanded naviball got no touches.
+     * [G] Opening the naviball menu takes window focus from the activity, so releasing on focus
+     * loss frees it. The debug overlay shows the focus state to confirm.
+     */
+    private var windowFocused = true
+    private var focusLosses = 0
+
+    override fun setWindowFocused(focused: Boolean) {
+        if (windowFocused == focused) return
+        windowFocused = focused
+        if (!focused) focusLosses++
+        applyEnabled()
+    }
+
+    /**
+     * [V] TouchHelper.setEraserRawDrawingEnabled exists in 1.4.12 and forwards to the device's
+     * EPD controller, next to setBrushRawDrawingEnabled. [I] It makes the system ink the eraser
+     * end's path live, like the pen tip. [G] Erase callbacks still fire with it on. Switchable
+     * from More in case either guess is wrong on the Note Air 2.
+     */
+    private var eraserTrail = true
+
+    override fun setEraserTrail(on: Boolean) {
+        if (eraserTrail == on) return
+        eraserTrail = on
+        helper?.let { h -> runCatching { h.setEraserRawDrawingEnabled(on) }.onFailure { lastError = "trail: ${it.javaClass.simpleName}" } }
+    }
+
     override fun pause() {
         paused = true
         applyEnabled()
@@ -267,6 +296,8 @@ class OnyxInkBackend : InkBackend {
         add("limit $limitRect, ${excludeRects.size} exclude, reopens $reopenCount")
         add("release when pen away: ${if (releaseWhenPenAway) "on" else "off"}, pen ${if (penNear) "near" else "away"}, wakes $wakeCount")
         add("commit from: $lastCommitSource, repaints $repaintCount")
+        add("eraser trail ${if (eraserTrail) "on" else "off"}")
+        add("window ${if (windowFocused) "focused" else "not focused"}, focus losses $focusLosses")
         if (lastListDelayMs >= 0) add("pen-up to point list: $lastListDelayMs ms")
         lastError?.let { add("error: $it") }
     }
@@ -322,6 +353,7 @@ class OnyxInkBackend : InkBackend {
         h.setPenUpRefreshEnabled(false)
         // [I] Default true per docs; set explicitly so a stylus button press does not erase.
         h.setBrushRawDrawingEnabled(true)
+        runCatching { h.setEraserRawDrawingEnabled(eraserTrail) }
         // [V per docs] Without this no callbacks fire.
         h.setRawDrawingEnabled(isActive())
         appliedActive = isActive()
@@ -341,7 +373,8 @@ class OnyxInkBackend : InkBackend {
         }
     }
 
-    private fun isActive() = wantEnabled && !paused && !repaintHold && (penNear || !releaseWhenPenAway)
+    private fun isActive() =
+        wantEnabled && !paused && windowFocused && !repaintHold && (penNear || !releaseWhenPenAway)
 
     private var appliedActive: Boolean? = null
 

@@ -27,6 +27,7 @@
 
     <string name="menu_labels">Show button labels</string>
     <string name="menu_grid">Dot grid</string>
+    <string name="menu_trail">Eraser trail</string>
     <string name="menu_clear">Clear page</string>
     <string name="menu_debug">Debug overlay</string>
     <string name="menu_release">Release pen when away</string>
