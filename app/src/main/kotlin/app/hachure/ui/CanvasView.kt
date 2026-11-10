@@ -129,8 +129,23 @@ class CanvasView @JvmOverloads constructor(
 
     private fun widthPx() = transform.lengthToView(tool.widthMm(widthPreset)).coerceAtLeast(1f)
 
+    /**
+     * Show where the eraser goes: a thin dashed trail for the eraser tool and the SDK's own
+     * live trail for the stylus eraser end. The trail is repainted away when the erase ends.
+     */
+    var eraserTrail = true
+        set(value) { field = value; pushBrush() }
+
+    private fun trailPx() = transform.lengthToView(TRAIL_MM).coerceAtLeast(2f)
+
     private fun pushBrush() {
-        backend.setBrush(tool, widthPx(), liveInk = mode == Mode.DRAW, wantMoves = mode == Mode.LINE)
+        if (mode == Mode.ERASE && eraserTrail) {
+            // The backend inks the eraser tool's path as a dashed line: instant, no app refresh.
+            backend.setBrush(Tool.DASH, trailPx(), liveInk = true, wantMoves = false)
+        } else {
+            backend.setBrush(tool, widthPx(), liveInk = mode == Mode.DRAW, wantMoves = mode == Mode.LINE)
+        }
+        backend.setEraserTrail(eraserTrail)
     }
 
     /** The app draws feedback while the pen is down (no backend ink, or line preview). */
@@ -266,6 +281,7 @@ class CanvasView @JvmOverloads constructor(
     // still runs afterwards and finds nothing left to erase.
 
     private val eraseBatch = ArrayList<RawPoint>()
+    private val eraseGesture = ArrayList<RawPoint>()
     private var lastEraseFlush = 0L
     private var eraseEvents = 0
     private var eraseUpAt = 0L
@@ -278,6 +294,7 @@ class CanvasView @JvmOverloads constructor(
                 h.beginGroup()
                 eraseUpAt = 0L
                 eraseBatch.clear()
+                eraseGesture.clear()
                 eraseEvents = 0
                 lastEraseFlush = 0L
             }
@@ -286,6 +303,7 @@ class CanvasView @JvmOverloads constructor(
             eraseBatch += RawPoint(e.getHistoricalX(i), e.getHistoricalY(i), 1f, e.getHistoricalEventTime(i))
         }
         eraseBatch += RawPoint(e.x, e.y, 1f, e.eventTime)
+        eraseGesture += eraseBatch.last()
         eraseEvents++
         val now = SystemClock.uptimeMillis()
         val ending = e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL
@@ -300,6 +318,7 @@ class CanvasView @JvmOverloads constructor(
             h.endGroup()
             eraseUpAt = now
             eraseStatus = "eraser: live, $eraseEvents events"
+            if (eraserTrail) clearTrail(eraseGesture, widthPx() * 1.5f)
         }
     }
 
@@ -338,8 +357,8 @@ class CanvasView @JvmOverloads constructor(
     // InkListener
 
     override fun onStrokeBegin(point: RawPoint) {
-        if (!appDrawsLive() || mode == Mode.ERASE) return
-        livePaint.strokeWidth = widthPx()
+        if (!appDrawsLive() || (mode == Mode.ERASE && !eraserTrail)) return
+        livePaint.strokeWidth = if (mode == Mode.ERASE) trailPx() else widthPx()
         liveActive = true
         livePath.rewind()
         livePath.moveTo(point.x, point.y)
@@ -372,7 +391,7 @@ class CanvasView @JvmOverloads constructor(
 
     override fun onStrokeEnd(points: List<RawPoint>, penUpUptime: Long) {
         when (mode) {
-            Mode.ERASE -> erase(points, ERASER_TOOL_RADIUS_MM)
+            Mode.ERASE -> erase(points, ERASER_TOOL_RADIUS_MM, trailPx())
             Mode.LINE -> commit(points, penUpUptime, straight = true)
             Mode.DRAW -> commit(points, penUpUptime, straight = false)
         }
@@ -385,7 +404,8 @@ class CanvasView @JvmOverloads constructor(
         } else {
             eraseStatus = "eraser: SDK only (no MotionEvents)"
         }
-        erase(points, ERASER_END_RADIUS_MM)
+        // The SDK inks the eraser end's trail in the current brush, so clear that much.
+        erase(points, ERASER_END_RADIUS_MM, widthPx() * 1.5f)
         endLive()
     }
 
@@ -437,7 +457,7 @@ class CanvasView @JvmOverloads constructor(
         statsListener?.onStrokeCommitted(points.size, now - penUpUptime, now - renderStart)
     }
 
-    private fun erase(points: List<RawPoint>, radiusMm: Float) {
+    private fun erase(points: List<RawPoint>, radiusMm: Float, trailWidthPx: Float) {
         val pg = page ?: return
         val h = history ?: return
         if (points.isEmpty()) return
@@ -445,6 +465,25 @@ class CanvasView @JvmOverloads constructor(
         val path = points.map { toPage(it, t0) }
         val ids = Hit.strokesTouched(pg.strokes, path, radiusMm)
         applyChange(h.erase(ids))
+        if (eraserTrail) clearTrail(points, trailWidthPx)
+    }
+
+    /** Repaints the area a live eraser trail covered, whether or not anything was erased. */
+    private fun clearTrail(points: List<RawPoint>, trailWidthPx: Float) {
+        if (points.isEmpty()) return
+        var l = Float.POSITIVE_INFINITY
+        var t = Float.POSITIVE_INFINITY
+        var r = Float.NEGATIVE_INFINITY
+        var b = Float.NEGATIVE_INFINITY
+        for (p in points) {
+            if (p.x < l) l = p.x
+            if (p.y < t) t = p.y
+            if (p.x > r) r = p.x
+            if (p.y > b) b = p.y
+        }
+        val pad = (trailWidthPx + 6f).toInt()
+        rebuild(Rect(l.toInt() - pad, t.toInt() - pad, r.toInt() + pad, b.toInt() + pad))
+        backend.showRepaint()
     }
 
     private fun toPage(p: RawPoint, t0: Long): InkPoint {
@@ -488,6 +527,9 @@ class CanvasView @JvmOverloads constructor(
 
         /** Eraser end of the stylus: broader, like rubbing out. */
         const val ERASER_END_RADIUS_MM = 2.5f
+
+        /** Width of the eraser tool's dashed trail. */
+        const val TRAIL_MM = 0.3f
 
         /** Live erase batch interval: each batch is one partial refresh. */
         const val ERASE_FRAME_MS = 80L

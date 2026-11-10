@@ -16,6 +16,10 @@ class Prefs(context: Context) {
         get() = sp.getBoolean(K_GRID, true)
         set(v) = sp.edit().putBoolean(K_GRID, v).apply()
 
+    var eraserTrail: Boolean
+        get() = sp.getBoolean(K_TRAIL, true)
+        set(v) = sp.edit().putBoolean(K_TRAIL, v).apply()
+
     var dock: ToolDock.Dock
         get() = runCatching { ToolDock.Dock.valueOf(sp.getString(K_DOCK, null)!!) }.getOrDefault(ToolDock.Dock.LEFT)
         set(v) = sp.edit().putString(K_DOCK, v.name).apply()
@@ -45,6 +49,7 @@ class Prefs(context: Context) {
     private companion object {
         const val K_LABELS = "show_labels"
         const val K_GRID = "dot_grid"
+        const val K_TRAIL = "eraser_trail"
         const val K_DOCK = "dock"
         const val K_PX = "puck_fx"
         const val K_PY = "puck_fy"

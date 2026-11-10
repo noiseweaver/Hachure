@@ -90,6 +90,19 @@ interface InkBackend {
      */
     fun showRepaint() {}
 
+    /**
+     * The activity window gained or lost input focus. Another window on top (the Boox naviball
+     * menu, a system panel, one of our menus) must get its touches, so backends that claim the
+     * digitizer let go while focus is away.
+     */
+    fun setWindowFocused(focused: Boolean) {}
+
+    /**
+     * Show a live trail under the stylus eraser end, where the backend can ink one itself. The
+     * view repaints the trail away when the erase ends.
+     */
+    fun setEraserTrail(on: Boolean) {}
+
     /** Extra lines for the debug overlay. */
     fun debugInfo(): List<String> = emptyList()
 }

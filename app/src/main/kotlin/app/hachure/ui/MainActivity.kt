@@ -56,6 +56,7 @@ class MainActivity : Activity() {
         canvas.tool = prefs.tool
         canvas.widthPreset = prefs.width
         canvas.dotGrid = if (prefs.dotGrid) DotGrid() else null
+        canvas.eraserTrail = prefs.eraserTrail
 
         dock.showLabels = prefs.showLabels
         dock.restore(prefs.dock, prefs.puckFx, prefs.puckFy)
@@ -92,6 +93,12 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         canvas.backend.resume()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        canvas.backend.setWindowFocused(hasFocus)
+        if (debugVisible()) renderDebug()
     }
 
     override fun onPause() {
@@ -239,6 +246,7 @@ class MainActivity : Activity() {
         val m = menu.menu
         m.add(0, M_LABELS, 0, R.string.menu_labels).setCheckable(true).isChecked = prefs.showLabels
         m.add(0, M_GRID, 1, R.string.menu_grid).setCheckable(true).isChecked = prefs.dotGrid
+        m.add(0, M_TRAIL, 2, R.string.menu_trail).setCheckable(true).isChecked = prefs.eraserTrail
         m.add(0, M_CLEAR, 2, R.string.menu_clear)
         m.add(0, M_DEBUG, 3, R.string.menu_debug).setCheckable(true).isChecked = debugVisible()
         onyx()?.let { o ->
@@ -256,6 +264,10 @@ class MainActivity : Activity() {
                 M_GRID -> {
                     prefs.dotGrid = !prefs.dotGrid
                     canvas.dotGrid = if (prefs.dotGrid) DotGrid() else null
+                }
+                M_TRAIL -> {
+                    prefs.eraserTrail = !prefs.eraserTrail
+                    canvas.eraserTrail = prefs.eraserTrail
                 }
                 M_CLEAR -> canvas.clearPage()
                 M_DEBUG -> toggleDebug()
@@ -320,5 +332,6 @@ class MainActivity : Activity() {
         private const val M_DEBUG = 4
         private const val M_RELEASE = 5
         private const val M_COORDS = 6
+        private const val M_TRAIL = 7
     }
 }
