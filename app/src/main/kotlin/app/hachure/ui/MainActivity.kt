@@ -29,6 +29,7 @@ class MainActivity : Activity() {
     private lateinit var debugOverlay: TextView
     private lateinit var prefs: Prefs
     private var lastStats: String? = null
+    private lateinit var systemUi: SystemUiWatcher
 
     private lateinit var store: NotebookStore
     private var notebookId: String? = null
@@ -86,12 +87,17 @@ class MainActivity : Activity() {
             if (debugVisible()) renderDebug()
         }
 
+        systemUi = SystemUiWatcher(this) { reason ->
+            canvas.backend.setSystemUiOpen(reason)
+            if (debugVisible()) renderDebug()
+        }
         window.decorView.viewTreeObserver.addOnGlobalLayoutListener(layoutListener)
         updateDock()
     }
 
     override fun onResume() {
         super.onResume()
+        systemUi.start()
         canvas.backend.resume()
     }
 
@@ -102,6 +108,7 @@ class MainActivity : Activity() {
     }
 
     override fun onPause() {
+        systemUi.stop()
         canvas.backend.pause()
         // Boox freezes or kills background apps quickly, so the save must be on disk before
         // this returns. A page is small (14 bytes a point); this takes a few ms.

@@ -103,6 +103,12 @@ interface InkBackend {
      */
     fun setEraserTrail(on: Boolean) {}
 
+    /**
+     * A system panel that does not take window focus is open over the canvas (the Boox naviball
+     * menu, a system dialog). [reason] is shown in the debug overlay; null means none is open.
+     */
+    fun setSystemUiOpen(reason: String?) {}
+
     /** Extra lines for the debug overlay. */
     fun debugInfo(): List<String> = emptyList()
 }
