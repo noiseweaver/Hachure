@@ -23,6 +23,7 @@ class MainActivity : Activity() {
     private lateinit var debugOverlay: TextView
     private lateinit var prefs: Prefs
     private var lastStats: String? = null
+    private lateinit var systemUi: SystemUiWatcher
 
     private val layoutListener = ViewTreeObserver.OnGlobalLayoutListener { pushExcludeRects() }
 
@@ -59,12 +60,17 @@ class MainActivity : Activity() {
             if (debugVisible()) renderDebug()
         }
 
+        systemUi = SystemUiWatcher(this) { reason ->
+            canvas.backend.setSystemUiOpen(reason)
+            if (debugVisible()) renderDebug()
+        }
         window.decorView.viewTreeObserver.addOnGlobalLayoutListener(layoutListener)
         updateDock()
     }
 
     override fun onResume() {
         super.onResume()
+        systemUi.start()
         canvas.backend.resume()
     }
 
@@ -75,6 +81,7 @@ class MainActivity : Activity() {
     }
 
     override fun onPause() {
+        systemUi.stop()
         canvas.backend.pause()
         super.onPause()
     }

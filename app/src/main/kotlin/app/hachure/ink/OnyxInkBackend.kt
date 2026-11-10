@@ -190,6 +190,22 @@ class OnyxInkBackend : InkBackend {
         helper?.let { h -> runCatching { h.setEraserRawDrawingEnabled(on) }.onFailure { lastError = "trail: ${it.javaClass.simpleName}" } }
     }
 
+    /**
+     * [V on device 2026-11-10] The expanded naviball does not take window focus, so focus loss
+     * alone did not free it. The activity listens for the Boox system UI broadcasts instead and
+     * reports them here. As a way out if a "closed" broadcast is missed, a pen stroke on the
+     * canvas itself (delivered as MotionEvents while released) clears the block on pen-up.
+     */
+    private var systemUiOpen: String? = null
+    private var systemUiBlocks = 0
+
+    override fun setSystemUiOpen(reason: String?) {
+        if (systemUiOpen == reason) return
+        if (reason != null && systemUiOpen == null) systemUiBlocks++
+        systemUiOpen = reason
+        applyEnabled()
+    }
+
     override fun pause() {
         paused = true
         applyEnabled()
@@ -207,6 +223,7 @@ class OnyxInkBackend : InkBackend {
         val tool = event.getToolType(0)
         val isPen = tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER
         if (isPen) onPenActivity()
+        if (isPen && systemUiOpen != null && event.actionMasked == MotionEvent.ACTION_UP) setSystemUiOpen(null)
         return isPen
     }
 
@@ -297,6 +314,7 @@ class OnyxInkBackend : InkBackend {
         add("release when pen away: ${if (releaseWhenPenAway) "on" else "off"}, pen ${if (penNear) "near" else "away"}, wakes $wakeCount")
         add("commit from: $lastCommitSource, repaints $repaintCount")
         add("eraser trail ${if (eraserTrail) "on" else "off"}")
+        add("system ui: ${systemUiOpen ?: "none"}, blocks $systemUiBlocks")
         add("window ${if (windowFocused) "focused" else "not focused"}, focus losses $focusLosses")
         if (lastListDelayMs >= 0) add("pen-up to point list: $lastListDelayMs ms")
         lastError?.let { add("error: $it") }
@@ -374,7 +392,7 @@ class OnyxInkBackend : InkBackend {
     }
 
     private fun isActive() =
-        wantEnabled && !paused && windowFocused && !repaintHold && (penNear || !releaseWhenPenAway)
+        wantEnabled && !paused && windowFocused && systemUiOpen == null && !repaintHold && (penNear || !releaseWhenPenAway)
 
     private var appliedActive: Boolean? = null
 
