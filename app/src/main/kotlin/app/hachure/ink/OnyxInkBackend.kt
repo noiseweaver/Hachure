@@ -208,6 +208,37 @@ class OnyxInkBackend : InkBackend {
         applyEnabled()
     }
 
+    // While raw drawing is enabled the SDK holds the panel inside the limit rect: view
+    // invalidates are not shown until it lets go. [V on device 2026-11-10] erased strokes stayed
+    // on screen until the 1.5 s idle release, or for good while the pen stayed near. New ink
+    // hides this (the commit matches the live ink), removed ink does not. So after such a repaint
+    // raw drawing is switched off for one refresh, the pattern the Onyx demos use around redraws.
+    // [G] REPAINT_HOLD_MS is long enough for the partial refresh to start.
+
+    private var repaintPending = false
+    private var repaintHold = false
+    private var repaintCount = 0
+    private val repaintDone = Runnable {
+        repaintHold = false
+        applyEnabled()
+    }
+
+    override fun showRepaint() {
+        repaintPending = true
+        // Toggling mid-gesture would cut the stroke or rub short; the end callbacks flush.
+        if (!strokeInProgress) flushRepaint()
+    }
+
+    private fun flushRepaint() {
+        if (!repaintPending) return
+        repaintPending = false
+        main.removeCallbacks(repaintDone)
+        repaintHold = true
+        repaintCount++
+        applyEnabled()
+        main.postDelayed(repaintDone, REPAINT_HOLD_MS)
+    }
+
     override fun cleanScreen(target: View) {
         // [I] A full GC refresh while the SDK holds A2 can be ignored or fight the raw layer, so
         // inking is paused around it. [V] EpdController.invalidate(View, UpdateMode) exists.
@@ -235,7 +266,7 @@ class OnyxInkBackend : InkBackend {
         add("A2 live: ${liveTool.id}${if (liveInk) "" else " (ink off)"} ${String.format(Locale.US, "%.1f", liveWidthPx)}px, coords ${if (pointsAreScreenAbsolute) "screen" else "view"}")
         add("limit $limitRect, ${excludeRects.size} exclude, reopens $reopenCount")
         add("release when pen away: ${if (releaseWhenPenAway) "on" else "off"}, pen ${if (penNear) "near" else "away"}, wakes $wakeCount")
-        add("commit from: $lastCommitSource")
+        add("commit from: $lastCommitSource, repaints $repaintCount")
         if (lastListDelayMs >= 0) add("pen-up to point list: $lastListDelayMs ms")
         lastError?.let { add("error: $it") }
     }
@@ -310,7 +341,7 @@ class OnyxInkBackend : InkBackend {
         }
     }
 
-    private fun isActive() = wantEnabled && !paused && (penNear || !releaseWhenPenAway)
+    private fun isActive() = wantEnabled && !paused && !repaintHold && (penNear || !releaseWhenPenAway)
 
     private var appliedActive: Boolean? = null
 
@@ -395,6 +426,7 @@ class OnyxInkBackend : InkBackend {
                 if (usable) {
                     lastCommitSource = "moves (${pts.size} pts)"
                     listener?.onStrokeEnd(pts, up)
+                flushRepaint()
                 }
             }
         }
@@ -417,6 +449,7 @@ class OnyxInkBackend : InkBackend {
                 lastListDelayMs = delay
                 lastCommitSource = "point list (${pts.size} pts)"
                 listener?.onStrokeEnd(pts, up)
+                flushRepaint()
             }
         }
 
@@ -444,6 +477,7 @@ class OnyxInkBackend : InkBackend {
                 strokeInProgress = false
                 onPenActivity()
                 listener?.onEraseEnd(pts, up)
+                flushRepaint()
             }
         }
 
@@ -457,6 +491,7 @@ class OnyxInkBackend : InkBackend {
                 strokeInProgress = false
                 onPenActivity()
                 listener?.onEraseEnd(pts, up)
+                flushRepaint()
             }
         }
     }
@@ -503,6 +538,9 @@ class OnyxInkBackend : InkBackend {
             Tool.DASH -> TouchHelper.STROKE_STYLE_DASH
             Tool.CHARCOAL2 -> TouchHelper.STROKE_STYLE_CHARCOAL_V2
         }
+
+        /** Raw drawing stays off this long after an app repaint, so it reaches the screen. */
+        const val REPAINT_HOLD_MS = 250L
 
         /** Release the SDK this long after the last pen activity. */
         const val PEN_IDLE_MS = 1500L
