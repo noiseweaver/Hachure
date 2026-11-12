@@ -1,6 +1,7 @@
 package app.hachure.ui
 
 import android.content.Context
+import app.hachure.ink.SnapPreview
 import app.hachure.model.Tool
 import app.hachure.model.WidthPreset
 
@@ -24,6 +25,11 @@ class Prefs(context: Context) {
     var snap: Boolean
         get() = sp.getBoolean(K_SNAP, true)
         set(v) = sp.edit().putBoolean(K_SNAP, v).apply()
+
+    /** Milestone 6 spike: how a snapping stroke is shown while the pen is down. */
+    var snapPreview: SnapPreview
+        get() = runCatching { SnapPreview.valueOf(sp.getString(K_SNAP_PREVIEW, null)!!) }.getOrDefault(SnapPreview.AT_PEN_UP)
+        set(v) = sp.edit().putString(K_SNAP_PREVIEW, v.name).apply()
 
     var lockAll: Boolean
         get() = sp.getBoolean(K_LOCK_ALL, false)
@@ -65,6 +71,7 @@ class Prefs(context: Context) {
         const val K_GRID = "dot_grid"
         const val K_TRAIL = "eraser_trail"
         const val K_SNAP = "snap"
+        const val K_SNAP_PREVIEW = "snap_preview"
         const val K_LOCK_ALL = "lock_all"
         const val K_ANGLE_SNAP = "angle_snap"
         const val K_DOCK = "dock"

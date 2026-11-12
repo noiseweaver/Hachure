@@ -17,6 +17,7 @@ import app.hachure.BuildConfig
 import app.hachure.R
 import app.hachure.ink.InkDiagnostics
 import app.hachure.ink.OnyxInkBackend
+import app.hachure.ink.SnapPreview
 import app.hachure.geometry.Guides
 import app.hachure.model.DotGrid
 import app.hachure.model.Ruler
@@ -67,6 +68,7 @@ class MainActivity : Activity() {
         canvas.eraserTrail = prefs.eraserTrail
 
         canvas.guides.snapEnabled = prefs.snap
+        canvas.snapPreview = prefs.snapPreview
         canvas.guides.lockAll = prefs.lockAll
         canvas.guides.angleSnap = prefs.angleSnap
         canvas.guides.onSelectionChanged = { updateStrip() }
@@ -214,6 +216,7 @@ class MainActivity : Activity() {
             ToolDock.Item.SNAP -> {
                 prefs.snap = !prefs.snap
                 canvas.guides.snapEnabled = prefs.snap
+                canvas.syncSnapBands()
             }
             ToolDock.Item.LOCK -> {
                 prefs.lockAll = !prefs.lockAll
@@ -348,6 +351,10 @@ class MainActivity : Activity() {
         m.add(0, M_LABELS, 0, R.string.menu_labels).setCheckable(true).isChecked = prefs.showLabels
         m.add(0, M_GRID, 1, R.string.menu_grid).setCheckable(true).isChecked = prefs.dotGrid
         m.add(0, M_TRAIL, 2, R.string.menu_trail).setCheckable(true).isChecked = prefs.eraserTrail
+        val preview = m.addSubMenu(0, 0, 2, R.string.menu_snap_preview)
+        for ((i, mode) in SnapPreview.entries.withIndex()) {
+            preview.add(1, M_PREVIEW + i, i, previewLabel(mode)).setCheckable(true).isChecked = prefs.snapPreview == mode
+        }
         m.add(0, M_CLEAR, 2, R.string.menu_clear)
         m.add(0, M_DEBUG, 3, R.string.menu_debug).setCheckable(true).isChecked = debugVisible()
         onyx()?.let { o ->
@@ -357,6 +364,8 @@ class MainActivity : Activity() {
             }
         }
         menu.setOnMenuItemClickListener { item ->
+            // The Snap preview entry only opens its submenu.
+            if (item.hasSubMenu()) return@setOnMenuItemClickListener false
             when (item.itemId) {
                 M_LABELS -> {
                     prefs.showLabels = !prefs.showLabels
@@ -371,6 +380,10 @@ class MainActivity : Activity() {
                     prefs.eraserTrail = !prefs.eraserTrail
                     canvas.eraserTrail = prefs.eraserTrail
                 }
+                in M_PREVIEW until M_PREVIEW + SnapPreview.entries.size -> {
+                    prefs.snapPreview = SnapPreview.entries[item.itemId - M_PREVIEW]
+                    canvas.snapPreview = prefs.snapPreview
+                }
                 M_CLEAR -> canvas.clearPage()
                 M_DEBUG -> toggleDebug()
                 M_RELEASE -> onyx()?.let { it.releaseWhenPenAway = !it.releaseWhenPenAway }
@@ -381,6 +394,12 @@ class MainActivity : Activity() {
             true
         }
         withInkPaused(menu)
+    }
+
+    private fun previewLabel(m: SnapPreview) = when (m) {
+        SnapPreview.AT_PEN_UP -> R.string.preview_a
+        SnapPreview.TOUCH_PATH -> R.string.preview_b
+        SnapPreview.RENDER_SWITCH -> R.string.preview_c
     }
 
     private fun debugVisible() = debugOverlay.visibility == View.VISIBLE
@@ -440,5 +459,6 @@ class MainActivity : Activity() {
         private const val M_RELEASE = 5
         private const val M_COORDS = 6
         private const val M_TRAIL = 7
+        private const val M_PREVIEW = 20
     }
 }

@@ -230,6 +230,22 @@ through off, 1, 2 and 3-point perspective. Perspective is saved with the page.
   it turns a little with every hatch step, so stepped hatching fans out from the VP. An aimed
   ruler has only its move handle. Typing an angle sets it free again.
 
+## Snap preview (experiment)
+
+**More > Snap preview** chooses how a stroke that will snap to a ruler edge looks while the pen
+is still down. It is there to compare the three on the device; one will be kept.
+
+- **A: straighten at pen-up.** The fast live ink follows the pen freehand and the stroke jumps
+  onto the edge when the pen lifts.
+- **B: live line, touch path.** The snap bands are taken away from the ink SDK (one rectangle
+  for a level or upright edge, a row of small squares along a slanted one). A stroke that starts
+  there arrives as ordinary touch events and the app draws the straight line on the edge as you go.
+- **C: live line, render switch.** The SDK keeps the stroke but its ink is switched off for
+  that one stroke, and the app draws the straight line on the edge as you go.
+
+In B and C the line is drawn by the app with normal partial refreshes, so it trails the pen more
+than the SDK's ink. Strokes away from rulers, and perspective snapping, are the same in all three.
+
 A finger is ignored for half a second after the pen last touched the page, and the pen touching
 down cancels a ruler drag, so a resting hand does not shift things mid-stroke.
 

@@ -13,6 +13,10 @@ import android.view.MotionEvent
 import android.view.View
 import app.hachure.geometry.Hit
 import app.hachure.geometry.PageTransform
+import app.hachure.geometry.Edge
+import app.hachure.geometry.RulerGeometry
+import app.hachure.geometry.Snap
+import app.hachure.geometry.SnapBands
 import app.hachure.geometry.SnapResolver
 import app.hachure.geometry.Units
 import app.hachure.geometry.Vec2
@@ -23,6 +27,7 @@ import app.hachure.ink.InkListener
 import app.hachure.ink.MotionEventInkBackend
 import app.hachure.ink.OnyxInkBackend
 import app.hachure.ink.RawPoint
+import app.hachure.ink.SnapPreview
 import app.hachure.model.DotGrid
 import app.hachure.model.History
 import app.hachure.model.InkPoint
@@ -117,7 +122,39 @@ class CanvasView @JvmOverloads constructor(
 
     override fun guidesEdited() {
         backend.showRepaint()
+        syncSnapBands()
         pageEdited?.invoke()
+    }
+
+    /** How strokes that will snap are shown while the pen is down (Milestone 6 spike). */
+    var snapPreview = SnapPreview.AT_PEN_UP
+        set(value) {
+            field = value
+            syncSnapBands()
+        }
+
+    /** Tells the backend where strokes will snap. Call after any change to rulers or the snap switch. */
+    fun syncSnapBands() {
+        val pg = page
+        if (pg == null || !guides.snapEnabled || snapPreview == SnapPreview.AT_PEN_UP || pg.rulers.isEmpty()) {
+            backend.setSnapPreview(snapPreview, emptyList(), 0f, emptyList())
+            return
+        }
+        val edges = ArrayList<FloatArray>(pg.rulers.size * 2)
+        for (r in pg.rulers) {
+            for (side in intArrayOf(1, -1)) {
+                val e = RulerGeometry.edge(r, side)
+                val a = transform.pageToView(e.a)
+                val b = transform.pageToView(e.b)
+                edges += floatArrayOf(a.x, a.y, b.x, b.y)
+            }
+        }
+        val tiles = SnapBands.tiles(pg.rulers, Snap.DEFAULT_BAND_MM).map {
+            val a = transform.pageToView(Vec2(it.left, it.top))
+            val b = transform.pageToView(Vec2(it.right, it.bottom))
+            Rect(a.x.toInt(), a.y.toInt(), b.x.toInt() + 1, b.y.toInt() + 1)
+        }
+        backend.setSnapPreview(snapPreview, edges, transform.lengthToView(Snap.DEFAULT_BAND_MM), tiles)
     }
 
     init {
@@ -133,6 +170,7 @@ class CanvasView @JvmOverloads constructor(
         page = p
         history = History(p)
         guides.reset()
+        syncSnapBands()
         rebuild(null)
         historyChanged?.invoke()
     }
@@ -170,14 +208,12 @@ class CanvasView @JvmOverloads constructor(
         backend.setEraserTrail(eraserTrail)
     }
 
-    /** The app draws feedback while the pen is down (no backend ink, or line preview). */
-    private fun appDrawsLive() = !backend.rendersLiveStroke || mode == Mode.LINE
-
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         try {
             pushBrush()
             backend.attach(this, this)
+            syncSnapBands()
         } catch (t: Throwable) {
             fallBackToMotionEvent(t)
         }
@@ -199,6 +235,7 @@ class CanvasView @JvmOverloads constructor(
         runCatching { backend.detach() }
         backend = MotionEventInkBackend().also { it.attach(this, this) }
         pushBrush()
+        syncSnapBands()
     }
 
     /** SDK commit renderers only make sense when the SDK inks live. */
@@ -285,7 +322,7 @@ class CanvasView @JvmOverloads constructor(
         if (!liveActive) return
         val s = lineStart
         val e = lineEnd
-        if (mode == Mode.LINE && s != null && e != null) {
+        if (liveStraight && s != null && e != null) {
             canvas.drawLine(s.x, s.y, e.x, e.y, livePaint)
         } else if (!livePath.isEmpty) {
             canvas.drawPath(livePath, livePaint)
@@ -391,6 +428,7 @@ class CanvasView @JvmOverloads constructor(
             guides.allBounds(after)
             before.union(after)
             invalidate(before)
+            syncSnapBands()
         }
         applyChange(changed)
     }
@@ -407,26 +445,49 @@ class CanvasView @JvmOverloads constructor(
 
     // InkListener
 
-    override fun onStrokeBegin(point: RawPoint) {
+    override fun onStrokeBegin(point: RawPoint, liveInked: Boolean) {
         guides.penSeen()
-        if (!appDrawsLive() || (mode == Mode.ERASE && !eraserTrail)) return
+        strokeInked = liveInked
+        if (liveInked || (mode == Mode.ERASE && !eraserTrail)) return
         livePaint.strokeWidth = if (mode == Mode.ERASE) trailPx() else widthPx()
         liveActive = true
+        // A stroke that will snap to a ruler edge is previewed as the straight line on that edge.
+        liveEdge = null
+        if (mode == Mode.DRAW && guides.snapEnabled) {
+            val pg = page
+            if (pg != null && pg.rulers.isNotEmpty()) {
+                liveEdge = Snap.nearestEdge(pg.rulers, transform.viewToPage(Vec2(point.x, point.y)), Snap.DEFAULT_BAND_MM)?.edge
+            }
+        }
+        liveStraight = mode == Mode.LINE || liveEdge != null
+        val start = onLiveEdge(point)
         livePath.rewind()
-        livePath.moveTo(point.x, point.y)
-        lineStart = point
-        lineEnd = point
-        lastLive = point
-        invalidateSegment(point, point)
+        livePath.moveTo(start.x, start.y)
+        lineStart = start
+        lineEnd = start
+        lastLive = start
+        invalidateSegment(start, start)
+    }
+
+    /** True when the backend inked the current stroke itself; otherwise the commit must be shown. */
+    private var strokeInked = true
+    private var liveStraight = false
+    private var liveEdge: Edge? = null
+
+    /** [p] moved onto the edge the live stroke is snapping to, if any. */
+    private fun onLiveEdge(p: RawPoint): RawPoint {
+        val e = liveEdge ?: return p
+        val v = transform.pageToView(e.pointAt(e.along(transform.viewToPage(Vec2(p.x, p.y)))))
+        return p.copy(x = v.x, y = v.y)
     }
 
     override fun onStrokeMove(points: List<RawPoint>) {
         if (!liveActive || points.isEmpty()) return
         dirty.setEmpty()
-        if (mode == Mode.LINE) {
+        if (liveStraight) {
             val s = lineStart ?: return
             lineEnd?.let { unionSegment(s, it) }
-            val e = points.last()
+            val e = onLiveEdge(points.last())
             lineEnd = e
             unionSegment(s, e)
         } else {
@@ -474,6 +535,8 @@ class CanvasView @JvmOverloads constructor(
             dirty.union(pathBounds.left.toInt() - pad, pathBounds.top.toInt() - pad, pathBounds.right.toInt() + pad, pathBounds.bottom.toInt() + pad)
         }
         liveActive = false
+        liveStraight = false
+        liveEdge = null
         livePath.rewind()
         lineStart = null
         lineEnd = null
@@ -517,7 +580,7 @@ class CanvasView @JvmOverloads constructor(
             strokeRenderer.drawStroke(c, stroke, transform)
             regionOf(listOf(stroke))?.let { invalidate(it) }
             // The SDK inked nothing for a line-tool stroke, so this repaint has to be shown.
-            if (straight) backend.showRepaint()
+            if (straight || !strokeInked) backend.showRepaint()
         } else {
             // The freehand live ink has to go: repaint where it was and where the line now is.
             val region = rawBounds(points, widthPx() * 1.5f)
@@ -529,6 +592,7 @@ class CanvasView @JvmOverloads constructor(
                     guides.boundsOf(it, rulerBefore)
                     invalidate(rulerBefore)
                 }
+                syncSnapBands()
             }
             backend.showRepaint()
             snappedStrokes++

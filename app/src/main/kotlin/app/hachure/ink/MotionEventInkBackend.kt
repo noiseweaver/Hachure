@@ -80,7 +80,7 @@ class MotionEventInkBackend : InkBackend {
                 current.clear()
                 val p = sample(event, 0, -1)
                 current += p
-                l.onStrokeBegin(p)
+                l.onStrokeBegin(p, liveInked = false)
                 return true
             }
 
