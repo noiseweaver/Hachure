@@ -15,9 +15,24 @@ data class RawPoint(
     val timeMs: Long,
 )
 
+/**
+ * How a stroke that will snap to a ruler edge is shown while the pen is down (Milestone 6 spike).
+ *
+ * - [AT_PEN_UP] (A): freehand live ink, straightened when the pen lifts.
+ * - [TOUCH_PATH] (B): snap bands are excluded from the backend's own inking; a stroke starting
+ *   there arrives as touch events and the app draws the straight line live.
+ * - [RENDER_SWITCH] (C): the backend keeps the stroke but turns its own ink off for it, and the
+ *   app draws the straight line live.
+ */
+enum class SnapPreview { AT_PEN_UP, TOUCH_PATH, RENDER_SWITCH }
+
 /** Callbacks from a backend. All are delivered on the UI thread, in view-local pixels. */
 interface InkListener {
-    fun onStrokeBegin(point: RawPoint)
+    /**
+     * Pen down. [liveInked] is true when the backend itself draws this stroke while the pen is
+     * down; when false the listener must draw any live feedback and show the commit.
+     */
+    fun onStrokeBegin(point: RawPoint, liveInked: Boolean)
 
     /**
      * New samples while the pen is down. Backends that render the live stroke themselves
@@ -121,6 +136,13 @@ interface InkBackend {
      * switch the view to a fast refresh so the drag outline keeps up.
      */
     fun setGuideDrag(on: Boolean) {}
+
+    /**
+     * Snap preview mode and where strokes will snap. [edges] are ruler edges as (ax, ay, bx, by)
+     * in view pixels, [bandPx] the snap band, [tiles] view-pixel rects covering the bands (used
+     * by [SnapPreview.TOUCH_PATH]). Backends that always leave live drawing to the app ignore it.
+     */
+    fun setSnapPreview(mode: SnapPreview, edges: List<FloatArray>, bandPx: Float, tiles: List<Rect>) {}
 
     /** Extra lines for the debug overlay. */
     fun debugInfo(): List<String> = emptyList()

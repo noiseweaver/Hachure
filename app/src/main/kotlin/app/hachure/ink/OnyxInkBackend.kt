@@ -47,7 +47,7 @@ class OnyxInkBackend : InkBackend {
      * ink them. [I per docs] setRawDrawingRenderEnabled(false) keeps callbacks flowing.
      * [G] that move callbacks keep arriving with render off (needed for the line preview).
      */
-    var liveInk = true
+    @Volatile var liveInk = true
         set(value) {
             if (field == value) return
             field = value
@@ -149,11 +149,84 @@ class OnyxInkBackend : InkBackend {
     }
 
     override fun setExcludeRects(rects: List<Rect>) {
-        val copy = rects.map { Rect(it) }
-        if (copy == excludeRects) return
-        excludeRects = copy
+        uiExclude = rects.map { Rect(it) }
+        applyExcludes()
+    }
+
+    private var uiExclude: List<Rect> = emptyList()
+
+    private fun applyExcludes() {
+        val all = ArrayList(uiExclude)
+        if (snapMode == SnapPreview.TOUCH_PATH) {
+            // View pixels to screen pixels, clipped to the canvas.
+            for (t in bandTiles) {
+                val r = Rect(t)
+                r.offset(viewOffsetX, viewOffsetY)
+                if (limitRect.isEmpty || r.intersect(limitRect)) all += r
+            }
+        }
+        if (all == excludeRects) return
+        excludeRects = all
         // [V per docs] Updating rects on an open helper does nothing; close and reopen.
         if (helper != null) reopen()
+    }
+
+    // Milestone 6 spike: live preview of strokes that will snap to a ruler edge.
+    //
+    // B, touch path: [I per docs] the SDK takes no input inside exclude rects, so a stylus stroke
+    // that starts in a snap band reaches the view as MotionEvents; it is collected by
+    // heldStrokeEvent and drawn live by the app. [G] Dozens of small exclude rects (a row of
+    // squares along each slanted edge) are accepted and do not slow the SDK. [G] Reopening the
+    // SDK after every hatch step (the band moved) is quick enough.
+    //
+    // C, render switch: [V] setRawDrawingRenderEnabled exists. [G] Calling it from
+    // onBeginRawDrawing turns the SDK's ink off for the stroke that just began, callbacks keep
+    // coming, and turning it back on after pen-up is stable. [G] App repaints show while raw
+    // drawing is enabled with render off (the line tool depends on the same thing).
+
+    @Volatile private var snapMode = SnapPreview.AT_PEN_UP
+    @Volatile private var snapEdges: Array<FloatArray> = emptyArray()
+    @Volatile private var snapBandPx = 0f
+    private var bandTiles: List<Rect> = emptyList()
+    @Volatile private var strokeAppDrawn = false
+    private var appDrawnStrokes = 0
+
+    override fun setSnapPreview(mode: SnapPreview, edges: List<FloatArray>, bandPx: Float, tiles: List<Rect>) {
+        snapMode = mode
+        snapEdges = edges.toTypedArray()
+        snapBandPx = bandPx
+        bandTiles = tiles.map { Rect(it) }
+        applyExcludes()
+    }
+
+    /** Same test as Snap.nearestEdge, in view pixels. Safe on any thread. */
+    private fun inBand(x: Float, y: Float): Boolean {
+        val band = snapBandPx
+        for (e in snapEdges) {
+            val dx = e[2] - e[0]
+            val dy = e[3] - e[1]
+            val len = kotlin.math.hypot(dx, dy)
+            if (len == 0f) continue
+            val ux = dx / len
+            val uy = dy / len
+            val px = x - e[0]
+            val py = y - e[1]
+            val along = px * ux + py * uy
+            val dist = kotlin.math.abs(px * uy - py * ux)
+            if (dist <= band && along >= -band && along <= len + band) return true
+        }
+        return false
+    }
+
+    /** Main thread. Gives the SDK its ink back after a stroke the app drew (option C). */
+    private fun endAppDrawn() {
+        if (!strokeAppDrawn) return
+        strokeAppDrawn = false
+        appDrawnStrokes++
+        if (appliedActive == true) {
+            runCatching { helper?.setRawDrawingRenderEnabled(liveInk) }
+                .onFailure { lastError = "render on: ${it.javaClass.simpleName}" }
+        }
     }
 
     override fun setEnabled(enabled: Boolean) {
@@ -241,11 +314,24 @@ class OnyxInkBackend : InkBackend {
     private var heldStroke: ArrayList<RawPoint>? = null
     private var heldStrokes = 0
 
+    private var heldSent = 0
+    private var heldSentAt = 0L
+    private var touchPathStrokes = 0
+
     private fun heldStrokeEvent(e: MotionEvent) {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                if (!(repaintHold || guideDrag) || appliedActive == true) return
-                heldStroke = ArrayList<RawPoint>(256).also { it += RawPoint(e.x, e.y, e.pressure.coerceIn(0f, 1f), e.eventTime) }
+                val rescued = (repaintHold || guideDrag) && appliedActive != true
+                val touchPath = snapMode == SnapPreview.TOUCH_PATH && liveInk && !strokeInProgress && inBand(e.x, e.y)
+                if (!rescued && !touchPath) return
+                if (touchPath) touchPathStrokes++
+                val first = RawPoint(e.x, e.y, e.pressure.coerceIn(0f, 1f), e.eventTime)
+                heldStroke = ArrayList<RawPoint>(256).also { it += first }
+                heldSent = 1
+                heldSentAt = 0L
+                // Raw drawing stays off for this stroke, so the app's live drawing shows.
+                applyEnabled()
+                listener?.onStrokeBegin(first, liveInked = false)
             }
             MotionEvent.ACTION_MOVE -> {
                 val pts = heldStroke ?: return
@@ -253,6 +339,12 @@ class OnyxInkBackend : InkBackend {
                     pts += RawPoint(e.getHistoricalX(i), e.getHistoricalY(i), e.getHistoricalPressure(i).coerceIn(0f, 1f), e.getHistoricalEventTime(i))
                 }
                 pts += RawPoint(e.x, e.y, e.pressure.coerceIn(0f, 1f), e.eventTime)
+                val now = SystemClock.uptimeMillis()
+                if (now - heldSentAt >= MOVE_THROTTLE_MS) {
+                    heldSentAt = now
+                    listener?.onStrokeMove(ArrayList(pts.subList(heldSent, pts.size)))
+                    heldSent = pts.size
+                }
             }
             MotionEvent.ACTION_UP -> {
                 val pts = heldStroke ?: return
@@ -388,6 +480,7 @@ class OnyxInkBackend : InkBackend {
         add("release when pen away: ${if (releaseWhenPenAway) "on" else "off"}, pen ${if (penNear) "near" else "away"}, wakes $wakeCount")
         add("commit from: $lastCommitSource, repaints $repaintCount, strokes during repaint $heldStrokes")
         add("eraser trail ${if (eraserTrail) "on" else "off"}")
+        add("snap preview ${snapMode.name}: touch path strokes $touchPathStrokes, render switch strokes $appDrawnStrokes, band rects ${excludeRects.size - uiExclude.size}")
         add("system ui: ${systemUiOpen ?: "none"}, blocks $systemUiBlocks")
         add("window ${if (windowFocused) "focused" else "not focused"}, focus losses $focusLosses")
         if (lastListDelayMs >= 0) add("pen-up to point list: $lastListDelayMs ms")
@@ -509,11 +602,22 @@ class OnyxInkBackend : InkBackend {
             penUpAt = 0L
             moveBuffer.clear()
             moveBuffer += rp
+            val inked = liveInk
+            val app = inked && snapMode == SnapPreview.RENDER_SWITCH && inBand(rp.x, rp.y)
+            if (app) {
+                // Option C: as early as possible, before the SDK inks more of this stroke.
+                strokeAppDrawn = true
+                runCatching { helper?.setRawDrawingRenderEnabled(false) }
+            } else if (strokeAppDrawn) {
+                // The previous app-drawn stroke never reported its end: give the ink back.
+                strokeAppDrawn = false
+                runCatching { helper?.setRawDrawingRenderEnabled(inked) }
+            }
             main.post {
                 strokeInProgress = true
                 heldStroke = null
                 onPenActivity()
-                listener?.onStrokeBegin(rp)
+                listener?.onStrokeBegin(rp, liveInked = inked && !app)
             }
         }
 
@@ -526,7 +630,7 @@ class OnyxInkBackend : InkBackend {
             // ignored: each app invalidate would cost a 100 to 300 ms e-ink refresh. The line
             // preview takes them, throttled to one per MOVE_THROTTLE_MS.
             moveBuffer += toRaw(p)
-            if (!wantMoves || liveInk) return
+            if (!strokeAppDrawn && (!wantMoves || liveInk)) return
             val now = SystemClock.uptimeMillis()
             if (now - lastMoveSent < MOVE_THROTTLE_MS) return
             lastMoveSent = now
@@ -554,7 +658,8 @@ class OnyxInkBackend : InkBackend {
                 if (usable) {
                     lastCommitSource = "moves (${pts.size} pts)"
                     listener?.onStrokeEnd(pts, up)
-                flushRepaint()
+                    endAppDrawn()
+                    flushRepaint()
                 }
             }
         }
@@ -578,6 +683,7 @@ class OnyxInkBackend : InkBackend {
                 lastListDelayMs = delay
                 lastCommitSource = "point list (${pts.size} pts)"
                 listener?.onStrokeEnd(pts, up)
+                endAppDrawn()
                 flushRepaint()
             }
         }

@@ -63,6 +63,10 @@
     <string name="menu_labels">Show button labels</string>
     <string name="menu_grid">Dot grid</string>
     <string name="menu_trail">Eraser trail</string>
+    <string name="menu_snap_preview">Snap preview</string>
+    <string name="preview_a">A: straighten at pen-up</string>
+    <string name="preview_b">B: live line, touch path</string>
+    <string name="preview_c">C: live line, render switch</string>
     <string name="menu_clear">Clear page</string>
     <string name="menu_debug">Debug overlay</string>
     <string name="menu_release">Release pen when away</string>
