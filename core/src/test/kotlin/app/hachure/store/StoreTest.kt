@@ -2,6 +2,8 @@ package app.hachure.store
 
 import app.hachure.model.InkPoint
 import app.hachure.model.Page
+import app.hachure.model.Perspective
+import app.hachure.model.VanishingPoint
 import app.hachure.model.Ruler
 import app.hachure.model.Stroke
 import app.hachure.model.Tool
@@ -49,6 +51,36 @@ class StoreTest {
         assertEquals(pg.rulers, back.rulers)
         assertEquals(pg.strokes, back.strokes)
         assertEquals(5L, back.newGuideId())
+    }
+
+    @Test fun codecKeepsPerspectiveAndAim() {
+        val pg = page().apply {
+            putRuler(Ruler(3, 40f, 60f, 212.5f, aimVp = 2))
+            perspective = Perspective(
+                2,
+                listOf(VanishingPoint(-300f, 80f, true), VanishingPoint(500f, 81f), VanishingPoint(70f, 900f)),
+                horizonLocked = true, linesVisible = false, rays = 36,
+            )
+        }
+        val out = ByteArrayOutputStream()
+        PageCodec.write(pg, out)
+        val back = PageCodec.read(ByteArrayInputStream(out.toByteArray()))
+        assertEquals(pg.perspective, back.perspective)
+        assertEquals(pg.rulers, back.rulers)
+    }
+
+    @Test fun codecReadsVersion2WithoutPerspective() {
+        val out = ByteArrayOutputStream()
+        DataOutputStream(out).apply {
+            writeInt(0x48414348); writeInt(2); writeFloat(157f); writeFloat(209f); writeInt(0)
+            writeInt(1)
+            writeLong(4); writeFloat(10f); writeFloat(20f); writeFloat(30f); writeFloat(130f); writeFloat(14f)
+            writeBoolean(true); writeFloat(2.5f); writeByte(-1)
+            flush()
+        }
+        val back = PageCodec.read(ByteArrayInputStream(out.toByteArray()))
+        assertEquals(Ruler(4, 10f, 20f, 30f, 130f, 14f, true, 2.5f, -1, 0), back.rulers.single())
+        assertEquals(0, back.perspective.points)
     }
 
     @Test fun codecReadsVersion1WithoutRulers() {

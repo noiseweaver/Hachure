@@ -8,11 +8,15 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
+import app.hachure.geometry.Aim
 import app.hachure.geometry.Guides
 import app.hachure.geometry.Handle
 import app.hachure.geometry.PageTransform
+import app.hachure.geometry.PerspectiveGeometry
+import app.hachure.geometry.PerspectiveItem
 import app.hachure.geometry.RulerGeometry
 import app.hachure.geometry.Vec2
+import app.hachure.model.Perspective
 import app.hachure.model.Ruler
 
 /**
@@ -36,6 +40,7 @@ class GuideRenderer {
     private val path = Path()
     private val oval = RectF()
     private var dash: DashPathEffect? = null
+    private var faint: DashPathEffect? = null
 
     /** View-pixel bounds of everything [draw] or [drawGhost] may paint for [r]. */
     fun bounds(r: Ruler, t: PageTransform, out: Rect) {
@@ -55,7 +60,7 @@ class GuideRenderer {
         out.set(l.toInt() - pad, tp.toInt() - pad, rt.toInt() + pad, b.toInt() + pad)
     }
 
-    fun draw(c: Canvas, r: Ruler, t: PageTransform, selected: Boolean, locked: Boolean) {
+    fun draw(c: Canvas, r: Ruler, t: PageTransform, selected: Boolean, locked: Boolean, aimed: Boolean = false) {
         val mm = t.scale
         val e1 = RulerGeometry.edge(r, 1)
         val e2 = RulerGeometry.edge(r, -1)
@@ -93,8 +98,152 @@ class GuideRenderer {
         if (locked) {
             drawLock(c, t.pageToView(RulerGeometry.center(r)), mm)
         } else {
-            for (h in Handle.entries) drawHandle(c, t.pageToView(Guides.handlePosition(r, h)), h, mm, r)
+            val handles = if (aimed) listOf(Handle.MOVE) else Handle.entries
+            for (h in handles) drawHandle(c, t.pageToView(Guides.handlePosition(r, h)), h, mm, r)
         }
+        if (aimed) {
+            // Mark the edge that converges on the vanishing point: a solid wedge at each end.
+            val e = RulerGeometry.edge(r, Aim.AIMED_SIDE)
+            val d = RulerGeometry.dir(r)
+            for ((p, s) in listOf(e.a to 1f, e.b to -1f)) wedge(c, t, p, p + d * (4f * s), p + d * (2f * s) - n * 2.5f)
+        }
+    }
+
+    private fun wedge(c: Canvas, t: PageTransform, a: Vec2, b: Vec2, tip: Vec2) {
+        path.rewind()
+        val va = t.pageToView(a)
+        val vb = t.pageToView(b)
+        val vt = t.pageToView(tip)
+        path.moveTo(va.x, va.y)
+        path.lineTo(vb.x, vb.y)
+        path.lineTo(vt.x, vt.y)
+        path.close()
+        c.drawPath(path, solid)
+    }
+
+    // Perspective
+
+    /** View bounds of one perspective handle (vanishing point or horizon). */
+    fun itemBounds(p: Perspective, item: PerspectiveItem, t: PageTransform, w: Float, h: Float, out: Rect) {
+        val pos = when (item) {
+            is PerspectiveItem.Vp -> PerspectiveGeometry.handlePosition(p.vps[item.index], w, h)
+            PerspectiveItem.Horizon -> PerspectiveGeometry.horizonHandle(p, w, h)
+        }
+        if (pos == null) {
+            out.setEmpty()
+            return
+        }
+        val v = t.pageToView(pos)
+        val pad = t.lengthToView(PerspectiveGeometry.HANDLE_MM / 2f + 4f).toInt() + 4
+        out.set(v.x.toInt() - pad, v.y.toInt() - pad, v.x.toInt() + pad, v.y.toInt() + pad)
+    }
+
+    /** View bounds of the visible horizon line; empty when it does not cross the page. */
+    fun horizonBounds(p: Perspective, t: PageTransform, w: Float, h: Float, out: Rect) {
+        val seg = PerspectiveGeometry.horizon(p)?.let { (o, d) -> PerspectiveGeometry.clipLine(o, d, w, h) }
+        if (seg == null) {
+            out.setEmpty()
+            return
+        }
+        val a = t.pageToView(seg.first)
+        val b = t.pageToView(seg.second)
+        out.set(minOf(a.x, b.x).toInt() - 6, minOf(a.y, b.y).toInt() - 6, maxOf(a.x, b.x).toInt() + 6, maxOf(a.y, b.y).toInt() + 6)
+    }
+
+    fun drawPerspective(c: Canvas, p: Perspective, t: PageTransform, w: Float, h: Float, lockAll: Boolean, selected: PerspectiveItem?) {
+        if (p.points == 0) return
+        if (p.linesVisible) {
+            val fd = faint ?: DashPathEffect(floatArrayOf(3f, 7f), 0f).also { faint = it }
+            line.strokeWidth = 1f
+            line.pathEffect = fd
+            for (vp in p.active) {
+                for ((a, b) in PerspectiveGeometry.rays(vp, p.rays, w, h)) seg(c, t, a, b)
+            }
+            line.pathEffect = null
+        }
+        PerspectiveGeometry.horizon(p)?.let { (o, d) ->
+            PerspectiveGeometry.clipLine(o, d, w, h)?.let { (a, b) ->
+                line.strokeWidth = if (selected == PerspectiveItem.Horizon) EDGE_PX + 2f else THIN_PX
+                seg(c, t, a, b)
+            }
+        }
+        val rad = t.lengthToView(PerspectiveGeometry.HANDLE_MM / 2f)
+        if (!PerspectiveGeometry.locked(p, PerspectiveItem.Horizon, lockAll)) {
+            PerspectiveGeometry.horizonHandle(p, w, h)?.let { pos ->
+                val v = t.pageToView(pos)
+                disc(c, v, rad, selected == PerspectiveItem.Horizon)
+                // Up and down arrow.
+                val k = rad * 0.55f
+                val a = k * 0.45f
+                line.strokeWidth = EDGE_PX
+                c.drawLine(v.x, v.y - k, v.x, v.y + k, line)
+                for (s in floatArrayOf(-1f, 1f)) {
+                    c.drawLine(v.x, v.y + s * k, v.x - a, v.y + s * (k - a), line)
+                    c.drawLine(v.x, v.y + s * k, v.x + a, v.y + s * (k - a), line)
+                }
+            }
+        }
+        for (i in 0 until p.points) {
+            val vp = p.vps[i]
+            val item = PerspectiveItem.Vp(i)
+            val v = t.pageToView(PerspectiveGeometry.handlePosition(vp, w, h))
+            val locked = PerspectiveGeometry.locked(p, item, lockAll)
+            val dir = PerspectiveGeometry.markerDirection(vp, w, h)
+            if (!locked) disc(c, v, rad, selected == item)
+            text.textSize = rad * 0.8f
+            line.strokeWidth = EDGE_PX
+            if (dir == null) {
+                // On the page: cross hair on the exact point, number beside it.
+                val k = if (locked) rad * 0.45f else rad
+                c.drawLine(v.x - k, v.y, v.x + k, v.y, line)
+                c.drawLine(v.x, v.y - k, v.x, v.y + k, line)
+                val off = if (locked) rad * 0.75f else rad * 0.45f
+                c.drawCircle(v.x + off, v.y - off, text.textSize * 0.62f, fill)
+                c.drawText((i + 1).toString(), v.x + off, v.y - off - (text.ascent() + text.descent()) / 2f, text)
+            } else {
+                // Off the page: an arrow pointing the way, number behind it.
+                val tip = Vec2(v.x + dir.x * rad * 0.8f, v.y + dir.y * rad * 0.8f)
+                val back = Vec2(v.x + dir.x * rad * 0.1f, v.y + dir.y * rad * 0.1f)
+                val side = Vec2(-dir.y, dir.x) * (rad * 0.4f)
+                path.rewind()
+                path.moveTo(tip.x, tip.y)
+                path.lineTo(back.x + side.x, back.y + side.y)
+                path.lineTo(back.x - side.x, back.y - side.y)
+                path.close()
+                c.drawPath(path, solid)
+                val tx = v.x - dir.x * rad * 0.45f
+                val ty = v.y - dir.y * rad * 0.45f
+                c.drawText((i + 1).toString(), tx, ty - (text.ascent() + text.descent()) / 2f, text)
+            }
+        }
+    }
+
+    private fun disc(c: Canvas, v: Vec2, rad: Float, selected: Boolean) {
+        c.drawCircle(v.x, v.y, rad, fill)
+        line.strokeWidth = if (selected) SELECTED_PX else EDGE_PX
+        c.drawCircle(v.x, v.y, rad - line.strokeWidth / 2f, line)
+    }
+
+    /** Dashed outline of where the dragged perspective item will land. */
+    fun drawPerspectiveGhost(c: Canvas, p: Perspective, item: PerspectiveItem, t: PageTransform, w: Float, h: Float) {
+        val d = dash ?: DashPathEffect(floatArrayOf(t.lengthToView(2f), t.lengthToView(1.2f)), 0f).also { dash = it }
+        line.strokeWidth = GHOST_PX
+        line.pathEffect = d
+        val rad = t.lengthToView(PerspectiveGeometry.HANDLE_MM / 2f)
+        val moved = when (item) {
+            is PerspectiveItem.Vp -> listOf(item.index)
+            PerspectiveItem.Horizon -> (0 until minOf(2, p.points)).toList()
+        }
+        for (i in moved) {
+            val v = t.pageToView(PerspectiveGeometry.handlePosition(p.vps[i], w, h))
+            c.drawCircle(v.x, v.y, rad, line)
+        }
+        if (item == PerspectiveItem.Horizon || (item is PerspectiveItem.Vp && item.index < 2)) {
+            PerspectiveGeometry.horizon(p)?.let { (o, dir) ->
+                PerspectiveGeometry.clipLine(o, dir, w, h)?.let { (a, b) -> seg(c, t, a, b) }
+            }
+        }
+        line.pathEffect = null
     }
 
     /** Dashed outline that follows the finger; [label] (the angle) is shown at the centre. */

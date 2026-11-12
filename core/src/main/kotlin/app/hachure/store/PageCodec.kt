@@ -2,9 +2,11 @@ package app.hachure.store
 
 import app.hachure.model.InkPoint
 import app.hachure.model.Page
+import app.hachure.model.Perspective
 import app.hachure.model.Ruler
 import app.hachure.model.Stroke
 import app.hachure.model.Tool
+import app.hachure.model.VanishingPoint
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.IOException
@@ -12,7 +14,7 @@ import java.io.InputStream
 import java.io.OutputStream
 
 /**
- * Binary page format, version 2 (version 1 files, which end after the strokes, still load).
+ * Binary page format, version 3 (versions 1 and 2 still load).
  * Big-endian (java.io.Data*):
  *
  * ```
@@ -21,7 +23,9 @@ import java.io.OutputStream
  *             per point: float x, float y, float pressure, int t (ms)
  * v2: int rulerCount,
  * per ruler: long id, float cx, cy, angleDeg, lengthMm, widthMm, boolean locked,
- *            float hatchSpacingMm, byte hatchDir
+ *            float hatchSpacingMm, byte hatchDir, v3: byte aimVp
+ * v3: byte points, 3 x (float x, float y, boolean locked), boolean horizonLocked,
+ *     boolean linesVisible, int rays
  * ```
  *
  * Compact (14 bytes a point) and fast to read on the device. Export formats (PNG, SVG) are
@@ -29,7 +33,7 @@ import java.io.OutputStream
  */
 object PageCodec {
     private const val MAGIC = 0x48414348 // "HACH"
-    const val VERSION = 2
+    const val VERSION = 3
 
     fun write(page: Page, out: OutputStream) {
         val d = DataOutputStream(out.buffered())
@@ -62,7 +66,18 @@ object PageCodec {
             d.writeBoolean(r.locked)
             d.writeFloat(r.hatchSpacingMm)
             d.writeByte(r.hatchDir)
+            d.writeByte(r.aimVp)
         }
+        val ps = page.perspective
+        d.writeByte(ps.points)
+        for (vp in ps.vps) {
+            d.writeFloat(vp.x)
+            d.writeFloat(vp.y)
+            d.writeBoolean(vp.locked)
+        }
+        d.writeBoolean(ps.horizonLocked)
+        d.writeBoolean(ps.linesVisible)
+        d.writeInt(ps.rays)
         d.flush()
     }
 
@@ -101,9 +116,21 @@ object PageCodec {
                         locked = d.readBoolean(),
                         hatchSpacingMm = d.readFloat(),
                         hatchDir = d.readByte().toInt().coerceIn(-1, 1),
+                        aimVp = if (version >= 3) d.readByte().toInt().coerceIn(0, 3) else 0,
                     ),
                 )
             }
+        }
+        if (version >= 3) {
+            val points = d.readByte().toInt().coerceIn(0, 3)
+            val vps = List(3) { VanishingPoint(d.readFloat(), d.readFloat(), d.readBoolean()) }
+            page.perspective = Perspective(
+                points = points,
+                vps = vps,
+                horizonLocked = d.readBoolean(),
+                linesVisible = d.readBoolean(),
+                rays = d.readInt().coerceIn(1, 360),
+            )
         }
         return page
     }

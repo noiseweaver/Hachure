@@ -1,5 +1,6 @@
 package app.hachure.model
 
+import app.hachure.geometry.Aim
 import app.hachure.geometry.Hatch
 
 /**
@@ -63,7 +64,8 @@ class History(private val page: Page, private val limit: Int = 500) {
     private fun shiftRuler(id: Long, dx: Float, dy: Float): Boolean {
         if (id == 0L || (dx == 0f && dy == 0f)) return false
         val r = page.ruler(id) ?: return false
-        page.putRuler(r.copy(cx = r.cx + dx, cy = r.cy + dy))
+        // A ruler aimed at a vanishing point turns as it steps, forward and back.
+        page.putRuler(Aim.apply(r.copy(cx = r.cx + dx, cy = r.cy + dy), page.perspective))
         return true
     }
 

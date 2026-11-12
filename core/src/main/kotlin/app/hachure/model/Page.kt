@@ -23,6 +23,9 @@ class Page(
 
     private var nextGuideId = 1L
 
+    /** Perspective guides; replaced as a whole on every change. */
+    var perspective: Perspective = Perspective.default(widthMm, heightMm)
+
     fun newGuideId(): Long = nextGuideId++
 
     fun ruler(id: Long): Ruler? = _rulers.firstOrNull { it.id == id }

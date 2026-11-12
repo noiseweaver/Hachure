@@ -4,8 +4,8 @@ A sketching app for the Onyx BOOX Note Air 2 (e-ink, Wacom EMR stylus), built ar
 inking and precise rulers and perspective guides for hatching.
 
 Status: Milestone 4. Fast A2 live ink through the Onyx pen SDK, notebooks shelf, tool rail and
-puck, eraser, undo, and rulers with snapping and automatic hatch stepping. Perspective guides
-come next (Milestone 5).
+puck, eraser, undo, rulers with snapping and automatic hatch stepping, and 1, 2 and 3-point
+perspective guides. A live snap preview comes next (Milestone 6).
 
 ## Install on the Boox with Obtainium (no cable, no adb)
 
@@ -202,6 +202,33 @@ Buttons are 9 mm and the rail 10 mm wide, measured from the panel's real dpi.
 - A locked ruler shows a padlock, has no handles and cannot be moved by a finger. It still snaps
   and still steps when hatching. **Lock all** on the rail locks every ruler at once. Lock a ruler
   you rest your hand on.
+
+## Perspective guides
+
+**Perspective** on the rail opens the perspective strip along the bottom. **Points** steps
+through off, 1, 2 and 3-point perspective. Perspective is saved with the page.
+
+- Each vanishing point (VP) has a numbered 9 mm finger handle. A VP can sit off the page: it then
+  shows as an arrow marker at the page edge, and every drag of the marker moves the VP by as much
+  as the finger moved, so repeated drags push it further out.
+- The horizon runs through VP1 and VP2 (horizontal through VP1 in 1-point). Its handle, with the
+  up and down arrow, moves it and both points up or down.
+- Thin dotted guide lines radiate from each VP. **Guide lines** shows or hides them and the
+  minus and plus buttons step their number per point (12, 24, 36, 72).
+- **Selected** steps through VP1 to VP3 and the horizon; **Lock** locks that one. A locked VP or
+  horizon has no handle. A locked horizon also keeps VP1 and VP2 on it: they still slide along
+  the line. **Lock all** on the rail covers these too.
+- Snapping: the first 5 mm of a stroke decide where it is heading. If that is within 8 degrees of
+  the line to a VP, the stroke becomes a straight segment toward (or away from) that VP when the
+  pen lifts. In 1 and 2-point perspective true vertical and horizontal snap the same way. The
+  closest match wins; with no match the stroke stays freehand.
+- Rulers and perspective work together. Order: a stroke that starts within 4 mm of a ruler edge
+  goes to the ruler, otherwise to a matching VP, otherwise it stays freehand. **Snap** on the
+  rail switches all of it off and on.
+- Perspective hatching: select a ruler and tap **Aim** to point it at VP1, VP2 or VP3. The edge
+  with the two solid wedges then always passes through that VP, wherever you move the ruler, and
+  it turns a little with every hatch step, so stepped hatching fans out from the VP. An aimed
+  ruler has only its move handle. Typing an angle sets it free again.
 
 A finger is ignored for half a second after the pen last touched the page, and the pen touching
 down cancels a ruler drag, so a resting hand does not shift things mid-stroke.

@@ -13,6 +13,7 @@
     <string name="tool_eraser">Eraser</string>
     <string name="tool_width">Width</string>
     <string name="tool_ruler">Ruler</string>
+    <string name="tool_perspective">Perspective</string>
     <string name="tool_snap">Snap</string>
     <string name="tool_lock_all">Lock all</string>
     <string name="tool_undo">Undo</string>
@@ -40,6 +41,21 @@
     <string name="guide_lock">Lock</string>
     <string name="guide_delete">Delete</string>
     <string name="guide_done">Done</string>
+    <string name="guide_aim">Aim</string>
+    <string name="guide_aim_free">free</string>
+    <string name="guide_aim_vp">VP%1$d</string>
+
+    <!-- Guide strip for perspective. -->
+    <string name="persp_item">Selected</string>
+    <string name="persp_vp">VP%1$d</string>
+    <string name="persp_horizon">Horizon</string>
+    <string name="persp_points">Points</string>
+    <string name="persp_points_n">%1$d pt</string>
+    <string name="persp_lines">Guide lines</string>
+    <string name="persp_lines_glyph">lines</string>
+    <string name="persp_fewer">Fewer</string>
+    <string name="persp_density">Per point</string>
+    <string name="persp_more">More</string>
     <string name="ruler_limit">A page holds up to %1$d rulers</string>
     <string name="angle_title">Ruler angle</string>
     <string name="angle_hint">Degrees. 0 is horizontal, 45 rises to the right, 90 is vertical.</string>
